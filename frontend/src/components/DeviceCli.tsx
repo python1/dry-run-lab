@@ -3,8 +3,9 @@ import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "../api";
+import type { Lab } from "../types";
 
-export function DeviceCli({ device }: { device: string | null }) {
+export function DeviceCli({ device, onLab }: { device: string | null; onLab?: (lab: Lab) => void }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
 
@@ -59,11 +60,13 @@ export function DeviceCli({ device }: { device: string | null }) {
     observer.observe(scroll);
 
     let buffer = "";
+    const promptRef = { current: `${device ?? "lab"}# ` };
     const prompt = () => {
-      term.write(`\r\n${device ?? "lab"}# `);
+      term.write(`\r\n${promptRef.current}`);
     };
     term.writeln("Device CLI");
-    term.writeln("show running-config    show ip interface brief    show ip route");
+    term.writeln("show vlan brief    show interfaces trunk    show access-lists");
+    term.writeln("ping    traceroute    configure terminal    revert");
     term.writeln("Lines stay intact. Scroll sideways for the rest.");
     if (!device) term.writeln("Select a device first.");
     prompt();
@@ -80,8 +83,10 @@ export function DeviceCli({ device }: { device: string | null }) {
         return;
       }
       try {
-        const text = await api.show(device, trimmed);
-        const lines = text.split("\n");
+        const result = await api.show(device, trimmed);
+        if (result.lab && onLab) onLab(result.lab);
+        promptRef.current = result.prompt.endsWith(" ") ? result.prompt : `${result.prompt} `;
+        const lines = result.text.split("\n");
         const body = lines[0]?.includes(trimmed) ? lines.slice(1) : lines;
         writeBlock(body.join("\n"));
       } catch (error) {
@@ -128,7 +133,7 @@ export function DeviceCli({ device }: { device: string | null }) {
       observer.disconnect();
       term.dispose();
     };
-  }, [device]);
+  }, [device, onLab]);
 
   return (
     <div ref={scrollRef} className="device-cli-scroll h-full w-full">

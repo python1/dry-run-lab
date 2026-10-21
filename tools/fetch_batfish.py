@@ -10,6 +10,7 @@ wheel. It does not start a container.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import sys
@@ -31,27 +32,34 @@ def main() -> int:
         return 2
     dest = Path(sys.argv[1])
     dest.mkdir(parents=True, exist_ok=True)
-    if (dest / "allinone-bundle.jar").is_file() and (dest / "questions" / "stable").is_dir():
-        return 0
-    blob = _download_pinned() or _download_by_scanning()
-    _extract(blob, dest)
+    cached = (dest / "allinone-bundle.jar").is_file() and (dest / "questions" / "stable").is_dir()
+    if not cached:
+        blob = _download_pinned() or _download_by_scanning()
+        _extract(blob, dest)
     if not (dest / "allinone-bundle.jar").is_file():
         print("official jar was not in the image layer", file=sys.stderr)
         return 1
-    (dest / "provenance.json").write_text(
-        json.dumps(
-            {
-                "image": REPO,
-                "layer": PINNED_LAYER,
-                "source": "registry-1.docker.io",
-                "release": "v2026.08.27",
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    _write_provenance(dest, cached=cached)
     return 0
+
+
+def _write_provenance(dest: Path, cached: bool) -> None:
+    jar = dest / "allinone-bundle.jar"
+    digest = hashlib.sha256(jar.read_bytes()).hexdigest()
+    info = {
+        "image": REPO,
+        "layer": PINNED_LAYER,
+        "source": "registry-1.docker.io",
+        "release": "v2026.08.27",
+        "sha256": digest,
+        "cached": cached,
+    }
+    (dest / "provenance.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
+    print(
+        "batfish source={source} image={image} version={release} layer={layer} sha256={sha256} cached={cached}".format(
+            **info
+        )
+    )
 
 
 def _download_pinned() -> bytes | None:

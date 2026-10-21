@@ -8,28 +8,49 @@ import re
 import shutil
 import socket
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from dryrun_lab.configedit import apply_config_lines, prompt_for
 from dryrun_lab.configparse import canonical_interface
 from dryrun_lab.constants import COMPUTED_TAG, ENGINE_HOST, ENGINE_PORT
 from dryrun_lab.facts import annotate_warnings
 from dryrun_lab.paths import data_home
+from dryrun_lab.probes import Probe, probes_for_acl, probes_for_lab
 from dryrun_lab.showfmt import (
     command_help,
+    format_change_diff,
+    format_ping,
+    format_traceroute,
     normalize_command,
+    parse_flow,
+    show_access_lists,
+    show_interfaces_trunk,
     show_ip_interface_brief,
     show_ip_route,
     show_running_config,
     show_unsimulated,
+    show_vlan_brief,
+    vlan_names,
 )
-from dryrun_lab.store import Lab, Link
+from dryrun_lab.store import Lab, Link, push_config
 
 log = logging.getLogger("dryrun_lab.engine")
 
 
 class EngineUnavailable(RuntimeError):
     pass
+
+
+_CONFIG_ENTER = {"configure terminal", "configure", "conf t", "conf term", "conf terminal"}
+
+
+@dataclass
+class ShowResult:
+    text: str
+    prompt: str
+    changed: bool = False
 
 
 class Engine:
@@ -40,6 +61,8 @@ class Engine:
         self._session: Any = None
         self._interfaces: dict[str, list[dict[str, Any]]] = {}
         self._routes: dict[str, list[dict[str, Any]]] = {}
+        self._vlans: dict[str, list[dict[str, Any]]] = {}
+        self._drafts: dict[str, list[str]] = {}
         self._ready = False
 
     def healthy(self) -> bool:
@@ -57,6 +80,7 @@ class Engine:
         if not lab.devices:
             self._interfaces = {}
             self._routes = {}
+            self._vlans = {}
             self._ready = False
             lab.warnings = []
             lab.engine_error = None
@@ -74,6 +98,7 @@ class Engine:
                 warnings = _warnings(session)
                 self._interfaces = _interfaces(session)
                 self._routes = _routes(session)
+                self._vlans = _vlans(session)
                 self._ready = True
             lab.warnings = _attach_devices(warnings, lab)
             lab.engine_error = None
@@ -83,29 +108,80 @@ class Engine:
             self._ready = False
 
     def show(self, lab: Lab, device_name: str, command: str) -> str:
+        return self.show_result(lab, device_name, command).text
+
+    def show_result(self, lab: Lab, device_name: str, command: str) -> ShowResult:
         device = lab.device(device_name)
         if device is None:
             raise KeyError(device_name)
+        pieces = command.replace("\r\n", "\n").split("\n")
+        pieces = [piece for piece in pieces if piece.strip()] or [command]
+        texts: list[str] = []
+        prompt = f"{device.name}#"
+        changed = False
+        for piece in pieces:
+            prompt, text, piece_changed = self._dispatch(lab, device, piece)
+            changed = changed or piece_changed
+            if text:
+                texts.append(text)
+        if not texts:
+            texts.append(_wrap(device.name, command, ""))
+        return ShowResult("\n".join(texts), prompt, changed)
+
+    def _dispatch(self, lab: Lab, device: Any, command: str) -> tuple[str, str, bool]:
+        key = device.name.lower()
+        folded = " ".join(command.strip().split()).lower()
+        draft = self._drafts.get(key)
+        enable = f"{device.name}#"
+        if draft is not None:
+            return self._config_line(lab, device, command, draft)
+        if folded in _CONFIG_ENTER:
+            self._drafts[key] = []
+            text = _wrap(
+                device.name,
+                command,
+                "Enter configuration commands, one per line. End with END.\n",
+            )
+            return f"{device.name}(config)#", text, False
+        if folded in {"revert", "rollback"}:
+            return enable, self._revert(lab, device, command), True
+        flow = parse_flow(command)
+        if flow is not None:
+            self._ensure_ready(lab)
+            body, drop = self._flow_body(lab, device.name, flow)
+            formatter = format_ping if flow["kind"] == "ping" else format_traceroute
+            text = _wrap(
+                device.name,
+                command,
+                formatter(str(flow["dst"]), flow["src"], flow["ingress"], body, drop),
+            )
+            return enable, text, False
         kind = normalize_command(command)
         if kind is None:
             if "|" in command:
-                text = "% Pipes are not simulated in this version.\n\n" + command_help()
+                detail = "% Pipes are not simulated in this version.\n\n" + command_help()
             else:
-                text = "% Unrecognized command.\n\n" + command_help()
-            return _wrap(device.name, command, text)
+                detail = "% Unrecognized command.\n\n" + command_help()
+            return enable, _wrap(device.name, command, detail), False
         if kind == "running-config":
             rows = [row for row in lab.warnings if row.get("device") == device.name]
-            return _wrap(device.name, command, show_running_config(device.config, rows))
+            return enable, _wrap(device.name, command, show_running_config(device.config, rows)), False
         if kind == "warnings":
             rows = [row for row in lab.warnings if row.get("device") == device.name]
-            return _wrap(device.name, command, show_unsimulated(device.name, rows))
+            return enable, _wrap(device.name, command, show_unsimulated(device.name, rows)), False
+        if kind == "acl":
+            rows = self._interfaces.get(key, [])
+            return enable, _wrap(device.name, command, show_access_lists(device.config, rows)), False
         self._ensure_ready(lab)
-        key = device.name.lower()
         if kind == "interfaces":
             body = show_ip_interface_brief(self._interfaces.get(key, []))
+        elif kind == "vlan":
+            body = show_vlan_brief(self._vlans.get(key, []), vlan_names(device.config))
+        elif kind == "trunk":
+            body = show_interfaces_trunk(self._interfaces.get(key, []))
         else:
             body = show_ip_route(self._routes.get(key, []))
-        return _wrap(device.name, command, body)
+        return enable, _wrap(device.name, command, body), False
 
     def _client(self) -> Any:
         if self._session is not None:
@@ -126,6 +202,179 @@ class Engine:
         if lab.engine_error:
             raise EngineUnavailable(lab.engine_error)
         raise EngineUnavailable("Nothing has been computed yet.")
+
+    def _config_line(self, lab: Lab, device: Any, command: str, draft: list[str]) -> tuple[str, str, bool]:
+        key = device.name.lower()
+        folded = " ".join(command.strip().split()).lower()
+        enable = f"{device.name}#"
+        if folded == "abort":
+            self._drafts.pop(key, None)
+            return enable, _wrap(device.name, command, "Configuration aborted. Nothing was applied.\n"), False
+        if folded == "end" or (folded == "exit" and _config_depth(draft) == 1):
+            lines = list(draft)
+            self._drafts.pop(key, None)
+            body = self._apply(lab, device, lines)
+            return enable, _wrap(device.name, command, body), True
+        if folded in {"revert", "rollback"}:
+            return prompt_for(device.name, draft), _wrap(
+                device.name,
+                command,
+                "Leave configuration mode before revert.\n",
+            ), False
+        if folded == "exit":
+            draft.append("exit")
+            return prompt_for(device.name, draft), _wrap(device.name, command, ""), False
+        draft.append(command.strip())
+        return prompt_for(device.name, draft), _wrap(device.name, command, ""), False
+
+    def _revert(self, lab: Lab, device: Any, command: str) -> str:
+        history = device.config_history
+        if not history:
+            return _wrap(device.name, command, "Nothing to revert on this device.\n")
+        previous = history.pop()
+        body = self._replace_config(lab, device, previous, applied=1, remember=False)
+        if body.startswith("Change was not kept"):
+            history.append(previous)
+        return _wrap(device.name, command, body)
+
+    def _apply(self, lab: Lab, device: Any, lines: list[str]) -> str:
+        updated = apply_config_lines(device.config, lines)
+        if updated == device.config:
+            return "No configuration changes.\n"
+        return self._replace_config(lab, device, updated, applied=len(lines), remember=True, edit_lines=lines)
+
+    def _replace_config(
+        self,
+        lab: Lab,
+        device: Any,
+        updated: str,
+        applied: int,
+        remember: bool,
+        edit_lines: list[str] | None = None,
+    ) -> str:
+        from dryrun_lab.store import apply_inference
+
+        self._ensure_ready(lab)
+        before_config = device.config
+        probes = _unique_probes(probes_for_lab(lab) + probes_for_acl(lab, device.name, edit_lines or []))
+        before_routes = _snap_routes(self._routes)
+        before_warnings = [dict(row) for row in lab.warnings]
+        before_reach = {probe.label(): self._reach_summary(lab, probe) for probe in probes}
+        if remember:
+            push_config(device, before_config)
+        device.config = updated
+        apply_inference(lab)
+        self.recompute(lab)
+        if lab.engine_error:
+            failed = lab.engine_error
+            device.config = before_config
+            if remember and device.config_history:
+                device.config_history.pop()
+            apply_inference(lab)
+            self.recompute(lab)
+            return f"Change was not kept. {failed}\n"
+        after_probes = _unique_probes(probes + probes_for_lab(lab))
+        after_reach = {probe.label(): self._reach_summary(lab, probe) for probe in after_probes}
+        for label, summary in before_reach.items():
+            after_reach.setdefault(label, summary)
+        missing = {label: "not present" for label in after_reach if label not in before_reach}
+        before_reach.update(missing)
+        return format_change_diff(
+            before_routes,
+            _snap_routes(self._routes),
+            before_warnings,
+            [dict(row) for row in lab.warnings],
+            before_reach,
+            after_reach,
+            applied,
+        )
+
+    def _flow_body(self, lab: Lab, device_name: str, flow: dict[str, str | None]) -> tuple[dict[str, Any], str | None]:
+        trace = self._trace(device_name, str(flow["dst"]), flow.get("src"), flow.get("ingress"))
+        drop = None
+        if _denied(trace):
+            drop = self._drop_line(lab, device_name, flow.get("src"), str(flow["dst"]))
+        return trace, drop
+
+    def _reach_summary(self, lab: Lab, probe: Probe) -> str:
+        trace = self._trace(probe.device, probe.dst, probe.src, probe.ingress)
+        summary = str(trace.get("disposition") or trace.get("error") or "none")
+        if _denied(trace):
+            drop = self._drop_line(lab, probe.device, probe.src, probe.dst)
+            if drop:
+                summary = summary + "; " + " ".join(drop.split())
+        return summary
+
+    def _trace(self, device: str, dst: str, src: str | None, ingress: str | None) -> dict[str, Any]:
+        from pybatfish.datamodel.flow import HeaderConstraints
+
+        start = device.lower()
+        if ingress:
+            start = f"@enter({device.lower()}[{canonical_interface(ingress)}])"
+        headers = HeaderConstraints(dstIps=dst, srcIps=src, ipProtocols=["ICMP"])
+        try:
+            with self._lock:
+                frame = (
+                    self._client()
+                    .q.traceroute(startLocation=start, headers=headers, maxTraces=1)
+                    .answer()
+                    .frame()
+                )
+        except Exception as exc:
+            text = str(exc)
+            if "no active location" in text.lower():
+                return {"ok": False, "disposition": "NO_ACTIVE_LOCATION", "steps": [], "error": "no active location"}
+            last = text.strip().splitlines()[-1] if text.strip() else "trace failed"
+            return {"ok": False, "disposition": "ERROR", "steps": [], "error": last[:300]}
+        rows = _records(frame)
+        if not rows:
+            return {"ok": False, "disposition": "NONE", "steps": [], "error": "no trace"}
+        traces = rows[0].get("Traces") or []
+        if not isinstance(traces, list) or not traces:
+            return {"ok": False, "disposition": "NONE", "steps": [], "error": "no trace"}
+        trace = traces[0]
+        steps: list[dict[str, Any]] = []
+        for hop in trace.get("hops") or []:
+            node = str(hop.get("node") or "")
+            for step in hop.get("steps") or []:
+                steps.append(
+                    {
+                        "node": node,
+                        "action": step.get("action"),
+                        "detail": step.get("detail") or {},
+                    }
+                )
+        return {"ok": True, "disposition": trace.get("disposition") or "", "steps": steps, "error": None}
+
+    def _drop_line(self, lab: Lab, device_name: str, src: str | None, dst: str) -> str | None:
+        from pybatfish.datamodel.flow import HeaderConstraints
+
+        try:
+            with self._lock:
+                frame = (
+                    self._client()
+                    .q.findMatchingFilterLines(
+                        nodes=device_name.lower(),
+                        headers=HeaderConstraints(dstIps=dst, srcIps=src, ipProtocols=["ICMP"]),
+                        action="deny",
+                    )
+                    .answer()
+                    .frame()
+                )
+        except Exception:
+            log.exception("findMatchingFilterLines failed")
+            return None
+        rows = _records(frame)
+        if not rows:
+            return None
+        rows.sort(key=lambda row: int(row.get("Line_Index") or 0))
+        top = rows[0]
+        acl = top.get("Filter") or "acl"
+        text = str(top.get("Line") or "").strip()
+        device = lab.device(device_name)
+        number = _config_line_number(device.config if device else "", text)
+        where = f"line {number}: " if number else ""
+        return f"Dropped by ACL {acl}\n  {where}{text}\n"
 
     def _write_snapshot(self, lab: Lab) -> Path:
         root = data_home() / "snapshot"
@@ -294,9 +543,77 @@ def _interfaces(session: Any) -> dict[str, list[dict[str, Any]]]:
                 "address": row.get("Primary_Address"),
                 "active": bool(row.get("Active")),
                 "admin_up": bool(row.get("Admin_Up")) if row.get("Admin_Up") is not None else True,
+                "mode": row.get("Switchport_Mode"),
+                "access_vlan": row.get("Access_VLAN"),
+                "allowed": row.get("Allowed_VLANs"),
+                "native": row.get("Native_VLAN"),
+                "filter_in": row.get("Incoming_Filter_Name"),
+                "filter_out": row.get("Outgoing_Filter_Name"),
             }
         )
     return grouped
+
+
+def _vlans(session: Any) -> dict[str, list[dict[str, Any]]]:
+    try:
+        frame = session.q.switchedVlanProperties().answer().frame()
+    except Exception:
+        log.exception("switchedVlanProperties failed")
+        return {}
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in _records(frame):
+        node = str(row.get("Node") or "").lower()
+        ports: list[str] = []
+        for ref in row.get("Interfaces") or []:
+            if isinstance(ref, dict):
+                name = str(ref.get("interface") or "")
+            else:
+                match = _IFACE_REF.match(str(ref or ""))
+                name = match.group(2) if match else str(ref or "")
+            if name:
+                ports.append(name)
+        grouped.setdefault(node, []).append({"vlan": row.get("VLAN_ID"), "ports": ports})
+    return grouped
+
+
+def _snap_routes(routes: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+    return {node: [dict(row) for row in rows] for node, rows in routes.items()}
+
+
+def _unique_probes(probes: list[Probe]) -> list[Probe]:
+    found: list[Probe] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for probe in probes:
+        if probe.key in seen:
+            continue
+        seen.add(probe.key)
+        found.append(probe)
+    return found
+
+
+def _denied(trace: dict[str, Any]) -> bool:
+    if str(trace.get("disposition") or "").upper() == "DENIED":
+        return True
+    return any(str(step.get("action") or "").upper() == "DENIED" for step in trace.get("steps") or [])
+
+
+def _config_depth(commands: list[str]) -> int:
+    nested = False
+    for raw in commands:
+        line = raw.strip().lower()
+        if line.startswith(("interface ", "ip access-list ", "router ")) or re.fullmatch(r"vlan\s+\d+", line):
+            nested = True
+        elif line == "exit":
+            nested = False
+    return 2 if nested else 1
+
+
+def _config_line_number(config: str, text: str) -> int | None:
+    want = " ".join(text.lower().split())
+    for number, raw in enumerate(config.splitlines(), start=1):
+        if " ".join(raw.strip().lower().split()) == want:
+            return number
+    return None
 
 
 def _routes(session: Any) -> dict[str, list[dict[str, Any]]]:

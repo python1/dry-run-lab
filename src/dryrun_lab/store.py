@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from dryrun_lab.configparse import parse_config
+from dryrun_lab.nsort import interface_key
 from dryrun_lab.infer import Inference, Suggestion, endpoint_key, infer, link_id
 
 
@@ -19,6 +20,7 @@ class Device:
     neighbor_text: str = ""
     x: float = 80
     y: float = 80
+    config_history: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -77,6 +79,7 @@ def lab_to_dict(lab: Lab) -> dict:
                 "neighborText": device.neighbor_text,
                 "x": device.x,
                 "y": device.y,
+                "configHistory": list(device.config_history),
             }
             for device in lab.devices
         ],
@@ -111,6 +114,7 @@ def lab_from_dict(data: dict) -> Lab:
                 neighbor_text=str(raw.get("neighborText") or ""),
                 x=float(raw.get("x") or 80),
                 y=float(raw.get("y") or 80),
+                config_history=[str(item) for item in raw.get("configHistory") or []],
             )
         )
     for raw in data.get("links") or []:
@@ -131,6 +135,13 @@ def lab_from_dict(data: dict) -> Lab:
     lab.warnings = list(data.get("warnings") or [])
     lab.engine_error = data.get("engineError")
     return lab
+
+
+def push_config(device: Device, previous: str) -> None:
+    """Remember the config that is about to be replaced."""
+    device.config_history.append(previous)
+    if len(device.config_history) > 20:
+        del device.config_history[:-20]
 
 
 def apply_inference(lab: Lab) -> None:
@@ -210,6 +221,7 @@ def public_lab(lab: Lab) -> dict:
     devices = []
     for device, raw in zip(lab.devices, payload["devices"]):
         parsed = parse_config(device.config)
+        ordered = sorted(parsed.interfaces, key=lambda iface: interface_key(iface.name))
         raw["interfaces"] = [
             {
                 "name": iface.name,
@@ -219,7 +231,7 @@ def public_lab(lab: Lab) -> dict:
                 "physical": iface.physical,
                 "shutdown": iface.shutdown,
             }
-            for iface in parsed.interfaces
+            for iface in ordered
         ]
         raw["unsimulated"] = by_device.get(device.name, [])
         devices.append(raw)

@@ -15,8 +15,34 @@ function short(name: string) {
     .replace("FastEthernet", "Fa");
 }
 
+function interfaceKey(name: string) {
+  return name
+    .split(/(\d+)/)
+    .filter(Boolean)
+    .map((part) => (/^\d+$/.test(part) ? Number(part) : part.toLowerCase()));
+}
+
+function compareInterfaces(left: string, right: string) {
+  const a = interfaceKey(left);
+  const b = interfaceKey(right);
+  const length = Math.max(a.length, b.length);
+  for (let index = 0; index < length; index += 1) {
+    const x = a[index];
+    const y = b[index];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    if (x === y) continue;
+    if (typeof x === "number" && typeof y === "number") return x - y;
+    return String(x) < String(y) ? -1 : 1;
+  }
+  return 0;
+}
+
 function physical(device: Device) {
-  return device.interfaces.filter((iface) => iface.physical);
+  return device.interfaces
+    .filter((iface) => iface.physical)
+    .slice()
+    .sort((left, right) => compareInterfaces(left.name, right.name));
 }
 
 function cardHeight(device: Device) {

@@ -23,6 +23,7 @@ from dryrun_lab.store import (
     confirm_link,
     dismiss_link,
     public_lab,
+    push_config,
 )
 
 log = logging.getLogger("dryrun_lab.server")
@@ -207,6 +208,7 @@ def update_device(name: str, body: DeviceUpdate) -> dict:
             raise HTTPException(404, "No such device")
         structural = False
         if body.config is not None and body.config != device.config:
+            push_config(device, device.config)
             device.config = body.config
             structural = True
         if body.neighborText is not None and body.neighborText != device.neighbor_text:
@@ -280,20 +282,24 @@ def recompute() -> dict:
 def show(body: ShowIn) -> JSONResponse:
     with _store.lock:
         try:
-            text = _engine.show(_store.lab, body.device, body.command)
+            result = _engine.show_result(_store.lab, body.device, body.command)
         except KeyError:
             raise HTTPException(404, "No such device") from None
         except EngineUnavailable as exc:
             raise HTTPException(503, str(exc)) from None
-    return JSONResponse(
-        {
+        if result.changed:
+            _store.save()
+        payload = {
             "device": body.device,
             "command": body.command,
-            "text": text,
+            "text": result.text,
+            "prompt": result.prompt,
             "simulated": True,
             "disclaimer": DISCLAIMER,
         }
-    )
+        if result.changed:
+            payload["lab"] = _payload()
+    return JSONResponse(payload)
 
 
 def _check_name(name: str) -> None:

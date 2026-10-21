@@ -408,7 +408,7 @@ export default function App() {
             </label>
           </div>
           <div className="min-h-0 flex-1 px-2 pb-2">
-            <DeviceCli device={selected} />
+            <DeviceCli device={selected} onLab={setLab} />
           </div>
         </section>
       </div>

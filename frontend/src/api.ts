@@ -49,6 +49,10 @@ export const api = {
     });
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail || "show failed");
-    return body.text as string;
+    return {
+      text: body.text as string,
+      prompt: (body.prompt as string) || `${device}#`,
+      lab: body.lab as Lab | undefined,
+    };
   },
 };

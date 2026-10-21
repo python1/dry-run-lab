@@ -46,11 +46,23 @@ bin/dryrun-lab warnings
 bin/dryrun-lab show R1 "show ip route"
 bin/dryrun-lab show R1 "show ip interface brief"
 bin/dryrun-lab show R1 "show running-config"
+bin/dryrun-lab show SW1 "show vlan brief"
+bin/dryrun-lab show SW1 "show interfaces trunk"
+bin/dryrun-lab show R1 "show access-lists"
+bin/dryrun-lab show R1 "ping 10.10.10.1"
+bin/dryrun-lab show R1 "traceroute 10.255.1.1 source 10.50.0.1"
 ```
 
-The CLI only talks to `127.0.0.1` or `localhost`. It reads config files locally and posts the text to the lab. Each show transcript is tagged `[computed]`. `bin/dryrun-lab --help` and `bin/dryrun-lab load` print the full limit. Other commands do not repeat it. The same limit stays in the lab banner.
+The CLI only talks to `127.0.0.1` or `localhost`. It reads config files locally and posts the text to the lab. Each show, ping, and traceroute transcript is tagged `[computed]`. `bin/dryrun-lab --help` and `bin/dryrun-lab load` print the full limit. Other commands do not repeat it. The same limit stays in the lab banner.
 
-Supported device-CLI commands in this stage: `show running-config`, `show ip interface brief`, `show ip route`, and `show warnings`. Pipes are refused.
+`configure terminal` edits that device's config. `end` recomputes and prints what changed in routes, warnings, and reachability. `abort` discards the lines. `revert` puts back the previous config and recomputes. The same commands work in the page's device CLI.
+
+```bash
+bin/dryrun-lab show R1 $'configure terminal\ninterface GigabitEthernet0/0\n shutdown\nend'
+bin/dryrun-lab show R1 revert
+```
+
+Supported device-CLI commands: `show running-config`, `show ip interface brief`, `show ip route`, `show vlan brief`, `show interfaces trunk`, `show access-lists`, `show warnings`, `ping`, `traceroute`, `configure terminal`, and `revert`. Pipes are refused. Interface lists use natural port order, so Gi1/0/2 comes before Gi1/0/10.
 
 ## Office lab
 
@@ -103,9 +115,9 @@ python3 -m venv .venv
 
 `bot/instructions.md` and `bot/skills/getting-started/SKILL.md` tell an assistant on this computer to run `./ensure-running` from the repository root before any lab command. That includes after a restart and after an Update Bot's Computer wipe. The skill does not open a browser unless someone asked for `--open`.
 
-## Later
+## Not tested here
 
-Still to build, on purpose: VLAN and trunk show commands, access-list show commands, computed ping and traceroute, config edits with a before/after diff, and the milestone labs (a VLAN end to end, an ACL that blocks a flow, a trunk that drops reachability).
+A real computer restart, an Update Bot's Computer wipe, and a fresh assistant template that has never seen this checkout were not run. `./ensure-running` is the command those cases need.
 
 ## License
 
