@@ -43,6 +43,10 @@ touch "$LOG"
 say() { printf '%s\n' "$*"; }
 log() { printf '%s\n' "$*" >>"$LOG"; }
 
+stamp="$(PYTHONPATH="$ROOT/src" python3 -c 'from dryrun_lab.version import version; print(version())' 2>/dev/null || true)"
+stamp="${stamp:-unknown}"
+log "dryrun-lab ${stamp}"
+
 as_root() {
   if [[ "$(id -u)" -eq 0 ]]; then
     "$@"
@@ -81,11 +85,35 @@ java_major() {
 
 summarize_apt() {
   local file="$1"
-  local certs
-  certs="$(grep -c 'Replacing debian:' "$file" || true)"
-  grep -vE 'Replacing debian:|Reading database|needrestart|Pending kernel upgrade|Restarting services|No containers need to be restarted|No user sessions are running outdated binaries|No VM guests are running outdated hypervisor|Service restarts being deferred' "$file" >>"$LOG" || true
-  if [[ "${certs}" -gt 0 ]]; then
-    log "apt replaced ${certs} certificate files"
+  local added replaced summary
+  added="$(grep -c 'Adding debian:' "$file" || true)"
+  replaced="$(grep -c 'Replacing debian:' "$file" || true)"
+  awk '
+    $0 ~ /^(Adding|Replacing) debian:/ { next }
+    $0 ~ /Reading database/ { next }
+    $0 ~ /needrestart/ { next }
+    $0 ~ /Pending kernel upgrade/ { next }
+    $0 ~ /Restarting services/ { next }
+    $0 ~ /No containers need to be restarted/ { next }
+    $0 ~ /No user sessions are running outdated binaries/ { next }
+    $0 ~ /No VM guests are running outdated hypervisor/ { next }
+    $0 ~ /Service restarts being deferred/ { next }
+    $0 ~ /Failed to retrieve available kernel versions\./ { next }
+    $0 ~ /Failed to check for processor microcode upgrades\./ { next }
+    $0 ~ /No services need to be restarted\./ { next }
+    $0 ~ /^[[:space:]]*$/ { next }
+    { print }
+  ' "$file" >>"$LOG" || true
+  summary=""
+  if [[ "${added}" -gt 0 && "${replaced}" -gt 0 ]]; then
+    summary="CA certificates: ${added} added, ${replaced} replaced"
+  elif [[ "${added}" -gt 0 ]]; then
+    summary="CA certificates: ${added} added"
+  elif [[ "${replaced}" -gt 0 ]]; then
+    summary="CA certificates: ${replaced} replaced"
+  fi
+  if [[ -n "${summary}" ]]; then
+    log "${summary}"
   fi
 }
 

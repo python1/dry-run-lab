@@ -41,6 +41,7 @@ export default function App() {
   const [addName, setAddName] = useState("");
   const [fitNonce, setFitNonce] = useState(0);
   const [terminalHeight, setTerminalHeight] = useState(readSplit);
+  const [stamp, setStamp] = useState("");
   const gridRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -65,6 +66,10 @@ export default function App() {
 
   useEffect(() => {
     void run(() => api.lab());
+    void api
+      .health()
+      .then((body) => setStamp(body.version || "unknown"))
+      .catch(() => setStamp("unknown"));
   }, []);
 
   const device = lab?.devices.find((item) => item.name === selected) ?? null;
@@ -463,7 +468,10 @@ export default function App() {
         </section>
       </div>
       <footer className="flex items-center justify-between border-t border-line px-4 py-1.5 text-xs text-muted">
-        <span>{CREDIT}</span>
+        <span>
+          {CREDIT}
+          {stamp ? <span className="ml-3">{stamp}</span> : null}
+        </span>
         <span>Not a live network</span>
       </footer>
       <Dialog open={addOpen} onOpenChange={setAddOpen}>

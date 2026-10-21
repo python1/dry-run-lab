@@ -79,7 +79,7 @@ def test_unconfirm_keeps_a_drawn_cable_and_restores_an_inferred_one() -> None:
     inferred = next(link for link in lab.links if link.status == "suggested")
     inferred.status = "confirmed"
     inferred_id = inferred.id
-    assert unconfirm_link(lab, inferred_id) is not None
+    assert unconfirm_link(lab, inferred_id) == "suggested"
     apply_inference(lab)
     restored = next(link for link in lab.links if link.id == inferred_id)
     assert restored.status == "suggested"
@@ -88,9 +88,11 @@ def test_unconfirm_keeps_a_drawn_cable_and_restores_an_inferred_one() -> None:
     )
     drawn = add_user_link(lab, "PC40", "Eth0", "SW2", "Gi0/12")
     assert drawn.status == "confirmed"
-    assert unconfirm_link(lab, drawn.id) is not None
+    assert unconfirm_link(lab, drawn.id) == "suggested"
     apply_inference(lab)
     kept = next(link for link in lab.links if link.id == drawn.id)
     assert kept.status == "suggested"
     assert kept.source == "user"
-    assert unconfirm_link(lab, "missing") is None
+    assert unconfirm_link(lab, "missing") == "missing"
+    assert unconfirm_link(lab, drawn.id) == "already"
+    assert kept.status == "suggested"

@@ -26,7 +26,12 @@ export const api = {
   health: async () => {
     const response = await fetch("/api/health");
     if (!response.ok) throw new Error("health failed");
-    return response.json() as Promise<{ engineUp: boolean; disclaimer: string; credit: string }>;
+    return response.json() as Promise<{
+      engineUp: boolean;
+      disclaimer: string;
+      credit: string;
+      version: string;
+    }>;
   },
   loadExample: () => request("/api/lab/load-example", { method: "POST" }),
   addDevice: (body: { name: string; role: string; x?: number; y?: number; config?: string }) =>

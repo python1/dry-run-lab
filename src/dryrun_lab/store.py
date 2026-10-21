@@ -277,13 +277,19 @@ def _seat_linked_host(lab: Lab, left: Device | None, right: Device | None) -> No
     host.x, host.y = place_host_near(lab, anchor, host)
 
 
-def unconfirm_link(lab: Lab, link_id_value: str) -> Link | None:
-    """Set a confirmed cable back to suggested."""
+def unconfirm_link(lab: Lab, link_id_value: str) -> str:
+    """Set a confirmed cable back to suggested.
+
+    Returns ``suggested`` when it changed, ``already`` when the cable was
+    already suggested, and ``missing`` when the id is unknown.
+    """
     for link in lab.links:
         if link.id == link_id_value:
+            if link.status == "suggested":
+                return "already"
             link.status = "suggested"
-            return link
-    return None
+            return "suggested"
+    return "missing"
 
 
 def confirm_link(lab: Lab, link_id_value: str) -> Link | None:

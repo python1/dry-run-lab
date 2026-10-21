@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from dryrun_lab.constants import CREDIT, DISCLAIMER, WEB_HOST, WEB_PORT
+from dryrun_lab.version import version
 from dryrun_lab.engine import Engine, EngineUnavailable
 from dryrun_lab.examples import load_office_lab
 from dryrun_lab.paths import data_home, static_dir
@@ -117,6 +118,7 @@ def _payload() -> dict:
     body = public_lab(_store.lab)
     body["disclaimer"] = DISCLAIMER
     body["credit"] = CREDIT
+    body["version"] = version()
     body["engineUp"] = _engine.healthy()
     return body
 
@@ -129,6 +131,7 @@ def health() -> dict:
         "computed": _engine._ready,
         "disclaimer": DISCLAIMER,
         "credit": CREDIT,
+        "version": version(),
     }
 
 
@@ -279,12 +282,16 @@ def confirm(link_id: str) -> dict:
 @app.post("/api/links/{link_id}/unconfirm")
 def unconfirm(link_id: str) -> dict:
     with _store.lock:
-        if unconfirm_link(_store.lab, link_id) is None:
+        outcome = unconfirm_link(_store.lab, link_id)
+        if outcome == "missing":
             raise HTTPException(404, "No such link")
-        apply_inference(_store.lab)
-        _engine.recompute(_store.lab)
-        _store.save()
-        return _payload()
+        if outcome == "suggested":
+            apply_inference(_store.lab)
+            _engine.recompute(_store.lab)
+            _store.save()
+        payload = _payload()
+        payload["unconfirm"] = outcome
+        return payload
 
 
 @app.post("/api/links/{link_id}/dismiss")

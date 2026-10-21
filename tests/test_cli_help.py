@@ -20,6 +20,35 @@ def test_host_and_link_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert "link_id" in capsys.readouterr().out
 
 
+def test_version_flag_prints_the_stamp(capsys: pytest.CaptureFixture[str]) -> None:
+    from dryrun_lab.version import version
+
+    with pytest.raises(SystemExit) as caught:
+        main(["--version"])
+    assert caught.value.code == 0
+    assert capsys.readouterr().out.strip() == f"dryrun-lab {version()}"
+
+
+def test_unconfirm_of_a_suggested_link_exits_cleanly(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_request(base: str, method: str, path: str, body: dict | None = None) -> dict:
+        assert method == "POST"
+        assert path == "/api/links/abc/unconfirm"
+        return {"unconfirm": "already"}
+
+    monkeypatch.setattr("dryrun_lab.cli._request", fake_request)
+    assert main(["link", "unconfirm", "abc"]) == 0
+    assert capsys.readouterr().out.strip() == "abc is already suggested"
+
+
+def test_unconfirm_of_a_confirmed_link_reports_the_change(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_request(base: str, method: str, path: str, body: dict | None = None) -> dict:
+        return {"unconfirm": "suggested"}
+
+    monkeypatch.setattr("dryrun_lab.cli._request", fake_request)
+    assert main(["link", "unconfirm", "abc"]) == 0
+    assert capsys.readouterr().out.strip() == "suggested abc"
+
+
 def test_help_keeps_the_full_disclaimer(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as caught:
         main(["--help"])

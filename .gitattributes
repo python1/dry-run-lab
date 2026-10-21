@@ -4,3 +4,4 @@
 ensure-running text eol=lf
 bin/* text eol=lf
 *.cfg text eol=lf
+src/dryrun_lab/version.py export-subst

@@ -59,6 +59,8 @@ bin/dryrun-lab link list
 
 The CLI only talks to `127.0.0.1` or `localhost`. It reads config files locally and posts the text to the lab. Each show, ping, and traceroute transcript is tagged `[computed]`. `bin/dryrun-lab --help` and `bin/dryrun-lab load` print the full limit. Other commands do not repeat it. The same limit stays in the lab banner.
 
+`bin/dryrun-lab --version` prints the build commit, for example `dryrun-lab e26bcd6`. The same stamp is the first line of each `ensure-running` log and sits next to the credit in the page footer. A checkout uses `git rev-parse`, and adds `-dirty` when the work tree has changes. A packaged tree with no `.git` uses the commit written into the package. If neither is available, the stamp is `unknown`.
+
 `configure terminal` edits that device's config. `end` recomputes and prints what changed in routes, warnings, and reachability. `abort` discards the lines. `revert` undoes one edit on that device and recomputes. Call it again to undo the edit before that. The transcript says `Reverted one edit. Recomputed.` The same commands work in the page's device CLI.
 
 ```bash
@@ -81,7 +83,7 @@ bin/dryrun-lab link delete LINK_ID
 bin/dryrun-lab host delete PC40
 ```
 
-`link add` writes a confirmed cable. `links` lists suggestions too. `confirm LINK_ID` accepts a suggestion. `link unconfirm LINK_ID` sets a confirmed cable back to suggested, so it is no longer used for layer 1. A cable you drew stays in the list. A cable the lab inferred shows up again as a suggestion. `dismiss LINK_ID` rejects one so it is not inferred again. Only a confirmed cable is written into the layer-1 topology. A host ping uses those confirmed cables. A suggested cable is not enough, so confirm the path before the ping.
+`link add` writes a confirmed cable. `links` lists suggestions too. `confirm LINK_ID` accepts a suggestion. `link unconfirm LINK_ID` sets a confirmed cable back to suggested, so it is no longer used for layer 1. A cable you drew stays in the list. A cable the lab inferred shows up again as a suggestion. If the cable is already suggested, the command says so and exits cleanly. `dismiss LINK_ID` rejects one so it is not inferred again. Only a confirmed cable is written into the layer-1 topology. A host ping uses those confirmed cables. A suggested cable is not enough, so confirm the path before the ping.
 
 Ping and traceroute print one sentence under the disposition. A drop names the ACL and its sequence number. When the trace starts on a host, a following line lists the layer-2 path across confirmed links and computed VLAN membership. Switches on that line are not hops in the computed trace. A shut or down cable is drawn red and dashed after the next recompute. A host with no address, no gateway, or no confirmed link is labeled **Not modeled**.
 

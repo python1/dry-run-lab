@@ -11,6 +11,7 @@ from pathlib import Path
 
 from dryrun_lab.constants import CREDIT, DISCLAIMER, WEB_HOST, WEB_PORT
 from dryrun_lab.examples import load_lab_dir
+from dryrun_lab.version import version
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -25,6 +26,7 @@ def main(argv: list[str] | None = None) -> int:
         default=f"http://{WEB_HOST}:{WEB_PORT}",
         help="Lab URL (loopback)",
     )
+    parser.add_argument("--version", action="version", version=f"dryrun-lab {version()}")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status", help="Engine and lab status")
@@ -192,8 +194,11 @@ def main(argv: list[str] | None = None) -> int:
                 _request(args.url, "DELETE", f"/api/links/{args.link_id}")
                 print(f"deleted {args.link_id}")
             elif args.link_cmd == "unconfirm":
-                _request(args.url, "POST", f"/api/links/{args.link_id}/unconfirm")
-                print(f"suggested {args.link_id}")
+                lab = _request(args.url, "POST", f"/api/links/{args.link_id}/unconfirm")
+                if lab.get("unconfirm") == "already":
+                    print(f"{args.link_id} is already suggested")
+                else:
+                    print(f"suggested {args.link_id}")
             else:
                 lab = _request(args.url, "GET", "/api/lab")
                 _print_links(lab)

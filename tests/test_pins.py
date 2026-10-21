@@ -26,6 +26,8 @@ def test_batfish_pins_fail_closed() -> None:
     assert ":latest" not in source
     assert "_download_by_scanning" not in source
     assert "layer sha256 verified: {PINNED_LAYER}" in source
+    assert "batfish jar cached, sha256 verified" in source
+    assert source.index("if cached:") < source.index("layer sha256 verified:")
     with pytest.raises(module.BatfishPinError, match="layer sha256 mismatch"):
         module._check_blob(b"not the layer")
     with pytest.raises(module.BatfishPinError, match="jar sha256 mismatch"):
@@ -36,8 +38,15 @@ def test_batfish_pins_fail_closed() -> None:
     assert "summarize_apt" in starter
     assert "reap_pid" in starter
     assert "Reading database" in starter
+    assert "Adding debian:" in starter
+    assert "CA certificates:" in starter
+    assert "Failed to retrieve available kernel versions" in starter
+    assert "No services need to be restarted" in starter
+    assert 'log "dryrun-lab ${stamp}"' in starter
     body = starter.split("summarize_apt()", 1)[1].split("apt_logged()", 1)[0]
-    assert body.index(">>\"$LOG\"") < body.index("apt replaced")
+    assert body.index(">>\"$LOG\"") < body.index("CA certificates:")
+    call = starter.split("log() {", 1)[1]
+    assert call.index("dryrun-lab ${stamp}") < call.index("\ninstall_packages\n")
 
 
 def test_sweep_removes_test_networks_and_keeps_dryrun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
