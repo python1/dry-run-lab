@@ -109,6 +109,7 @@ def _write_provenance(dest: Path, cached: bool) -> None:
         "batfish source={source} image={image} version={release} layer={layer} "
         "sha256={sha256} expected={expectedSha256} cached={cached}".format(**info)
     )
+    print(f"layer sha256 verified: {PINNED_LAYER}")
 
 
 def _extract(blob: bytes, dest: Path) -> None:

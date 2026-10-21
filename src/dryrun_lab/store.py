@@ -150,6 +150,28 @@ def place_host(lab: Lab) -> tuple[float, float]:
     return float(left), float(bottom + 64)
 
 
+def place_host_near(lab: Lab, anchor: Device, moving: Device | None = None) -> tuple[float, float]:
+    """Sit a host under the device it is cabled to, below hosts already there."""
+    warned = {str(row.get("device") or "").lower() for row in lab.warnings}
+    bottom = _card_bottom(anchor, anchor.name.lower() in warned)
+    cabled = {
+        link.b_device.lower()
+        for link in lab.links
+        if link.a_device.lower() == anchor.name.lower()
+    } | {
+        link.a_device.lower()
+        for link in lab.links
+        if link.b_device.lower() == anchor.name.lower()
+    }
+    for device in lab.devices:
+        if device is moving or device.role != "host":
+            continue
+        if device.name.lower() not in cabled or abs(device.x - anchor.x) > 1:
+            continue
+        bottom = max(bottom, _card_bottom(device, device.name.lower() in warned))
+    return float(anchor.x), float(bottom + 64)
+
+
 def _card_bottom(device: Device, extra: bool) -> float:
     parsed = parse_config(device.config)
     ports = sum(1 for iface in parsed.interfaces if iface.physical)
@@ -165,28 +187,45 @@ def push_config(device: Device, previous: str) -> None:
 
 
 def apply_inference(lab: Lab) -> None:
-    """Replace suggestions. Confirmed links and dismissed keys stay."""
+    """Replace suggestions. Confirmed links and dismissed keys stay.
+
+    A cable drawn in the lab and then set back to suggested stays. An
+    inferred cable is suggested again by this pass.
+    """
     payload = {device.name: (device.config, device.neighbor_text) for device in lab.devices}
     result: Inference = infer(payload)
     dismissed = set(lab.dismissed)
-    confirmed = [link for link in lab.links if link.status == "confirmed"]
+    alive = {device.name.lower() for device in lab.devices}
+    confirmed = [
+        link
+        for link in lab.links
+        if link.status == "confirmed"
+        and link.a_device.lower() in alive
+        and link.b_device.lower() in alive
+    ]
     confirmed_keys = {
         endpoint_key(link.a_device, link.a_interface, link.b_device, link.b_interface)
         for link in confirmed
     }
     suggestions: list[Link] = []
+    suggestion_keys: set[str] = set()
     for item in result.links:
         if item.key in dismissed or item.key in confirmed_keys:
             continue
         suggestions.append(_link_from_suggestion(item, "suggested"))
-    # Drop confirmed links that point at a device which is gone.
-    alive = {device.name.lower() for device in lab.devices}
-    confirmed = [
-        link
-        for link in confirmed
-        if link.a_device.lower() in alive and link.b_device.lower() in alive
-    ]
-    lab.links = confirmed + suggestions
+        suggestion_keys.add(item.key)
+    kept: list[Link] = []
+    for link in lab.links:
+        if link.status == "confirmed" or link.source != "user":
+            continue
+        if link.a_device.lower() not in alive or link.b_device.lower() not in alive:
+            continue
+        key = endpoint_key(link.a_device, link.a_interface, link.b_device, link.b_interface)
+        if key in dismissed or key in confirmed_keys or key in suggestion_keys:
+            continue
+        link.status = "suggested"
+        kept.append(link)
+    lab.links = confirmed + kept + suggestions
     lab.notes = result.notes
 
 
@@ -208,6 +247,7 @@ def add_user_link(lab: Lab, a_device: str, a_interface: str, b_device: str, b_in
             link.status = "confirmed"
             link.source = "user"
             link.reason = "drawn in the lab"
+            _seat_linked_host(lab, left, right)
             return link
     link = Link(
         id=link_id(key),
@@ -220,7 +260,30 @@ def add_user_link(lab: Lab, a_device: str, a_interface: str, b_device: str, b_in
         reason="drawn in the lab",
     )
     lab.links.append(link)
+    _seat_linked_host(lab, left, right)
     return link
+
+
+def _seat_linked_host(lab: Lab, left: Device | None, right: Device | None) -> None:
+    """Move a host under the switch or router the new cable attaches to."""
+    if left is None or right is None:
+        return
+    if left.role == "host" and right.role != "host":
+        host, anchor = left, right
+    elif right.role == "host" and left.role != "host":
+        host, anchor = right, left
+    else:
+        return
+    host.x, host.y = place_host_near(lab, anchor, host)
+
+
+def unconfirm_link(lab: Lab, link_id_value: str) -> Link | None:
+    """Set a confirmed cable back to suggested."""
+    for link in lab.links:
+        if link.id == link_id_value:
+            link.status = "suggested"
+            return link
+    return None
 
 
 def confirm_link(lab: Lab, link_id_value: str) -> Link | None:

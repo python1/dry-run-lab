@@ -434,9 +434,13 @@ type CableLayout = {
 
 function warningCaption(device: Device) {
   const ignored = device.unsimulated.filter((row) => row.kind === "ignored").length;
-  const missed = device.unsimulated.length - ignored;
+  const unreachable = device.unsimulated.filter((row) => row.kind === "unreachable").length;
+  const missed = device.unsimulated.filter(
+    (row) => row.kind !== "ignored" && row.kind !== "unreachable",
+  ).length;
   const parts: string[] = [];
   if (missed) parts.push(`${missed} line${missed === 1 ? "" : "s"} not simulated`);
+  if (unreachable) parts.push(`${unreachable} will never match`);
   if (ignored) parts.push(`${ignored} ignored when ip routing is enabled`);
   return parts.join(" · ");
 }

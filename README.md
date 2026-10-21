@@ -68,19 +68,20 @@ bin/dryrun-lab show R1 revert
 
 Supported device-CLI commands: `show running-config`, `show ip interface brief`, `show ip route`, `show vlan brief`, `show interfaces trunk`, `show access-lists`, `show warnings`, `ping`, `traceroute`, `configure terminal`, and `revert`. Pipes are refused. Interface lists use natural port order, so Gi1/0/2 comes before Gi1/0/10.
 
-`show access-lists` prints sequence numbers (`10`, `20`, `30`, …). A line typed in `ip access-list` mode without a number is appended and gets the last sequence plus 10. A line that starts with a number is inserted at that sequence. `no 25` and `no deny ip …` remove an entry. `ip access-list resequence NAME START STEP` renumbers that list. A resequence command this lab does not apply is left in the config and reported as not simulated. A new entry that can never match, because an earlier line already matches everything it would, is called out when the edit is committed.
+`show access-lists` prints sequence numbers (`10`, `20`, `30`, …). A line typed in `ip access-list` mode without a number is appended and gets the last sequence plus 10. A line that starts with a number is inserted at that sequence. `show running-config` does not print those numbers, and the saved config does not gain them, unless you typed the number on that line or `ip access-list resequence` wrote the new numbers. A number is also kept when leaving it off would make the next read assign a different sequence, which happens after an earlier line is removed. `no 25` and `no deny ip …` remove an entry. `ip access-list resequence NAME START STEP` renumbers that list and stores the new numbers. A resequence command this lab does not apply is left in the config and reported as not simulated. A new entry that can never match, because an earlier line already matches everything it would, is called out when the edit is committed, including in the Warnings section of the change summary.
 
-A host is an end device: one interface address and `ip default-gateway`. Add one from the shell, or with **Add a host** on the page. The page places a new host below the other cards.
+A host is an end device: one interface address and `ip default-gateway`. Add one from the shell, or with **Add a host** on the page. A new host starts below the other cards. `link add` moves it under the switch or router that cable attaches to, so a server cabled to SW3 sits with SW3.
 
 ```bash
 bin/dryrun-lab host add PC40 --ip 10.40.40.50/24 --gw 10.40.40.1
 bin/dryrun-lab host add SRV20 --ip 10.20.20.50/24 --gw 10.20.20.1
 bin/dryrun-lab link add PC40 Ethernet0 SW2 Gi0/12
+bin/dryrun-lab link unconfirm LINK_ID
 bin/dryrun-lab link delete LINK_ID
 bin/dryrun-lab host delete PC40
 ```
 
-`link add` writes a confirmed cable. `links` lists suggestions too. `confirm LINK_ID` accepts a suggestion. `dismiss LINK_ID` rejects one. Only a confirmed cable is written into the layer-1 topology. A host ping uses those confirmed cables. A suggested cable is not enough, so confirm the path before the ping.
+`link add` writes a confirmed cable. `links` lists suggestions too. `confirm LINK_ID` accepts a suggestion. `link unconfirm LINK_ID` sets a confirmed cable back to suggested, so it is no longer used for layer 1. A cable you drew stays in the list. A cable the lab inferred shows up again as a suggestion. `dismiss LINK_ID` rejects one so it is not inferred again. Only a confirmed cable is written into the layer-1 topology. A host ping uses those confirmed cables. A suggested cable is not enough, so confirm the path before the ping.
 
 Ping and traceroute print one sentence under the disposition. A drop names the ACL and its sequence number. When the trace starts on a host, a following line lists the layer-2 path across confirmed links and computed VLAN membership. Switches on that line are not hops in the computed trace. A shut or down cable is drawn red and dashed after the next recompute. A host with no address, no gateway, or no confirmed link is labeled **Not modeled**.
 
@@ -113,7 +114,7 @@ Each example device contains `ip default-gateway`. The lab reads that device's c
 
 - A canvas for routers, switches, hosts, and interface-to-interface cables
 - Link suggestions from interface descriptions, pasted CDP or LLDP text, and a shared `/30` with exactly two physical interfaces, plus confirm and dismiss
-- Hosts and cables from the page or from `host add` and `link add`
+- Hosts and cables from the page or from `host add` and `link add`, and `link unconfirm` to make a confirmed cable suggested again
 - Per-device config paste, with parse warnings kept visible
 - Device CLI: `show running-config`, `show ip interface brief`, `show ip route`, `show vlan brief`, `show interfaces trunk`, `show access-lists`, `show warnings`, `ping`, `traceroute`, `configure terminal`, and `revert`
 - The same actions from `dryrun-lab`

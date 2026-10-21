@@ -7,6 +7,7 @@ from dryrun_lab.showfmt import (
     show_access_lists,
     show_ip_interface_brief,
     show_ip_route,
+    show_unsimulated,
 )
 
 
@@ -133,6 +134,23 @@ def test_change_summary_prints_the_revert_headline_and_acl_notice() -> None:
     assert text.startswith("Reverted one edit. Recomputed.\n")
     assert "Applied 1 line" not in text
     assert text.index("it will never match") < text.index("Routes")
+
+
+def test_unreachable_acl_warning_is_its_own_list() -> None:
+    text = show_unsimulated(
+        "R1",
+        [
+            {
+                "text": "Line added at sequence 40, after sequence 30 permit ip any any; it will never match.",
+                "detail": "ACL GUEST-IN sequence 40",
+                "kind": "unreachable",
+            }
+        ],
+    )
+    assert "Will never match on R1" in text
+    assert "sequence 40" in text
+    assert "NOT simulated" not in text
+    assert "line " not in text
 
 
 def test_neighbor_unreachable_names_the_interface() -> None:

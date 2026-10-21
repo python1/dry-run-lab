@@ -24,6 +24,7 @@ from dryrun_lab.store import (
     dismiss_link,
     place_host,
     public_lab,
+    unconfirm_link,
     push_config,
 )
 
@@ -270,6 +271,17 @@ def confirm(link_id: str) -> dict:
     with _store.lock:
         if confirm_link(_store.lab, link_id) is None:
             raise HTTPException(404, "No such link")
+        _engine.recompute(_store.lab)
+        _store.save()
+        return _payload()
+
+
+@app.post("/api/links/{link_id}/unconfirm")
+def unconfirm(link_id: str) -> dict:
+    with _store.lock:
+        if unconfirm_link(_store.lab, link_id) is None:
+            raise HTTPException(404, "No such link")
+        apply_inference(_store.lab)
         _engine.recompute(_store.lab)
         _store.save()
         return _payload()

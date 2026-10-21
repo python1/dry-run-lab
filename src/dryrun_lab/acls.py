@@ -2,9 +2,11 @@
 
 Unnumbered lines already in a config are 10, 20, 30, and so on. A new line
 with no number is appended and gets the last sequence plus 10. A line that
-starts with a number is inserted at that sequence. `show access-lists` and
-the snapshot both use these numbers, so a drop is named by sequence rather
-than by a line in the file.
+starts with a number is inserted at that sequence. Those numbers stay
+internal: `show access-lists` and the snapshot print them, and a drop is
+named by sequence. `show running-config` and the saved config keep a line
+unnumbered unless the user typed the number, resequence wrote new ones, or
+leaving the number off would assign a different sequence next time.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ _ANY = {"permit ip any any", "permit any"}
 class Ace:
     seq: int
     text: str
+    explicit: bool = False
 
 
 @dataclass
@@ -53,7 +56,7 @@ def numbered_config(config: str) -> str:
     for start, end, _kind, _name, body, extras in _blocks(text):
         pieces.extend(lines[cursor:start])
         pieces.append(lines[start])
-        pieces.extend(_render(aces_from_body(body), extras))
+        pieces.extend(_render(aces_from_body(body), extras, numbered=True))
         cursor = end
     pieces.extend(lines[cursor:])
     rendered = "\n".join(pieces).rstrip() + "\n"
@@ -81,10 +84,10 @@ def apply_acl_body(body: list[str], line: str) -> list[str]:
         seq = (aces[-1].seq + 10) if aces else 10
         while any(ace.seq == seq for ace in aces):
             seq += 10
-        aces.append(Ace(seq, text))
+        aces.append(Ace(seq, text, explicit=False))
     else:
         aces = [ace for ace in aces if ace.seq != seq]
-        aces.append(Ace(seq, text))
+        aces.append(Ace(seq, text, explicit=True))
     aces.sort(key=lambda ace: ace.seq)
     return _render(aces, extras)
 
@@ -111,7 +114,7 @@ def apply_resequence_command(lines: list[str], command: str) -> list[str]:
         if acl_name.lower() == name.lower():
             found = True
             ordered = sorted(aces, key=lambda ace: ace.seq)
-            aces = [Ace(start + index * step, ace.text) for index, ace in enumerate(ordered)]
+            aces = [Ace(start + index * step, ace.text, explicit=True) for index, ace in enumerate(ordered)]
         pieces.extend(_render(aces, extras))
         cursor = end
     if not found:
@@ -197,17 +200,25 @@ def aces_from_body(body: list[str]) -> list[Ace]:
         return []
     if all(seq is None for seq, _text in parsed):
         return [Ace(10 * (index + 1), text) for index, (_seq, text) in enumerate(parsed)]
+    # An explicit number keeps its place. An unnumbered line takes the next
+    # free step of 10, and a number typed below that step (25 between 20 and
+    # 30) does not push the following unnumbered line forward.
     aces: list[Ace] = []
     used: set[int] = set()
-    last = 0
+    next_auto = 10
     for seq, text in parsed:
         if seq is None:
-            seq = (last + 10) if last else 10
-            while seq in used:
-                seq += 10
+            assigned = next_auto
+            while assigned in used:
+                assigned += 10
+            used.add(assigned)
+            next_auto = assigned + 10
+            aces.append(Ace(assigned, text, explicit=False))
+            continue
         used.add(seq)
-        last = max(last, seq)
-        aces.append(Ace(seq, text))
+        if seq >= next_auto:
+            next_auto = seq + 10
+        aces.append(Ace(seq, text, explicit=True))
     aces.sort(key=lambda ace: ace.seq)
     return aces
 
@@ -246,9 +257,39 @@ def _blocks(config: str) -> list[tuple[int, int, str, str, list[str], list[str]]
     return found
 
 
-def _render(aces: list[Ace], extras: list[str]) -> list[str]:
+def _render(aces: list[Ace], extras: list[str], *, numbered: bool = False) -> list[str]:
+    """Write ACL lines in running-config style.
+
+    A number is written when the user typed it, when every line is being
+    numbered for the snapshot, or when leaving it off would make the next
+    read assign a different sequence. Default 10, 20, 30 stay unnumbered.
+    """
     ordered = sorted(aces, key=lambda ace: ace.seq)
-    return [f" {ace.seq} {ace.text}" for ace in ordered] + [f" {extra}" for extra in extras]
+    lines: list[str] = []
+    next_auto = 10
+    used: set[int] = set()
+    for ace in ordered:
+        if numbered or ace.explicit or not _auto_would_match(ace.seq, next_auto, used):
+            lines.append(f" {ace.seq} {ace.text}")
+            used.add(ace.seq)
+            if ace.seq >= next_auto:
+                next_auto = ace.seq + 10
+            continue
+        assigned = next_auto
+        while assigned in used:
+            assigned += 10
+        lines.append(f" {ace.text}")
+        used.add(assigned)
+        next_auto = assigned + 10
+    lines.extend(f" {extra}" for extra in extras)
+    return lines
+
+
+def _auto_would_match(seq: int, next_auto: int, used: set[int]) -> bool:
+    assigned = next_auto
+    while assigned in used:
+        assigned += 10
+    return assigned == seq
 
 
 def _ace_text(action: str, rest: str) -> str:

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from dryrun_lab.acls import added_aces, numbered_config, sequence_of, shadow_sentence, split_sequence
+from dryrun_lab.acls import added_aces, numbered_config, parse_acls, sequence_of, shadow_sentence, split_sequence
 from dryrun_lab.configedit import apply_config_lines, prompt_for
 from dryrun_lab.configparse import canonical_interface, parse_config
 from dryrun_lab.constants import COMPUTED_TAG, ENGINE_HOST, ENGINE_PORT
@@ -127,6 +127,7 @@ class Engine:
                 self._ready = True
             lab.warnings = _attach_devices(warnings, lab)
             lab.warnings.extend(host_limits(lab))
+            lab.warnings.extend(self._unreachable_warnings(lab))
             _mark_link_state(lab, self._interfaces)
             lab.engine_error = None
         except Exception as exc:  # Batfish client raises its own types
@@ -314,7 +315,7 @@ class Engine:
             after_reach.setdefault(label, summary)
         missing = {label: "not present" for label in after_reach if label not in before_reach}
         before_reach.update(missing)
-        notices = self._acl_notices(device.name, before_config, updated)
+        notices = _notices_for_added(device.name, before_config, updated, lab.warnings)
         return format_change_diff(
             before_routes,
             _snap_routes(self._routes),
@@ -388,31 +389,45 @@ class Engine:
                 )
         return {"ok": True, "disposition": trace.get("disposition") or "", "steps": steps, "error": None}
 
-    def _acl_notices(self, device_name: str, before: str, after: str) -> list[str]:
-        added = added_aces(before, after)
-        if not added:
-            return []
-        questioned = True
+    def _unreachable_warnings(self, lab: Lab) -> list[dict[str, Any]]:
+        """ACL lines that can never match, kept with the other warnings."""
+        rows = self._reachability_rows()
+        questioned = rows is not None
+        if rows is None:
+            rows = []
+        found: list[dict[str, Any]] = []
+        for device in lab.devices:
+            if device.role == "host":
+                continue
+            hostname = parse_config(device.config).hostname
+            names = [device.name]
+            if hostname and hostname.lower() != device.name.lower():
+                names.append(hostname)
+            for acl in parse_acls(device.config):
+                for ace in acl.aces:
+                    matched = [
+                        row
+                        for row in rows
+                        if any(_unreachable_matches(row, name, acl.name, ace.text) for name in names)
+                    ]
+                    if questioned and not matched:
+                        continue
+                    if not questioned and not _covered_by_any(acl, ace):
+                        continue
+                    blockers: list[str] = []
+                    for row in matched:
+                        blockers.extend(_text_list(row.get("Blocking_Lines")))
+                    found.append(_unreachable_warning(device.name, acl, ace, blockers))
+        return found
+
+    def _reachability_rows(self) -> list[dict[str, Any]] | None:
         try:
             with self._lock:
-                frame = self._client().q.filterLineReachability(nodes=device_name.lower()).answer().frame()
-            rows = _records(frame)
+                frame = self._client().q.filterLineReachability().answer().frame()
+            return _records(frame)
         except Exception:
             log.exception("filterLineReachability failed")
-            rows = []
-            questioned = False
-        notices: list[str] = []
-        for acl, ace in added:
-            matched = [row for row in rows if _unreachable_matches(row, device_name, acl.name, ace.text)]
-            if questioned and not matched:
-                continue
-            if not questioned and not _covered_by_any(acl, ace):
-                continue
-            blockers: list[str] = []
-            for row in matched:
-                blockers.extend(_text_list(row.get("Blocking_Lines")))
-            notices.append(shadow_sentence(acl, ace, blockers))
-        return notices
+            return None
 
     def _drop_line(self, lab: Lab, device_name: str, src: str | None, dst: str) -> str | None:
         from pybatfish.datamodel.flow import HeaderConstraints
@@ -727,6 +742,43 @@ def _config_depth(commands: list[str]) -> int:
         elif line == "exit":
             nested = False
     return 2 if nested else 1
+
+
+def _notices_for_added(
+    device_name: str,
+    before: str,
+    after: str,
+    warnings: list[dict[str, Any]],
+) -> list[str]:
+    """Banner lines for unreachable ACL entries this edit introduced."""
+    added = {(acl.name.lower(), ace.seq, ace.text.lower()) for acl, ace in added_aces(before, after)}
+    if not added:
+        return []
+    notices: list[str] = []
+    for row in warnings:
+        if str(row.get("kind") or "") != "unreachable":
+            continue
+        if str(row.get("device") or "").lower() != device_name.lower():
+            continue
+        key = (str(row.get("acl") or "").lower(), row.get("sequence"), str(row.get("ace") or "").lower())
+        text = str(row.get("text") or "")
+        if key in added and text:
+            notices.append(text)
+    return notices
+
+
+def _unreachable_warning(device_name: str, acl: Any, ace: Any, blockers: list[str]) -> dict[str, Any]:
+    return {
+        "device": device_name,
+        "file": f"{_safe_name(device_name)}.cfg",
+        "line": None,
+        "text": shadow_sentence(acl, ace, blockers),
+        "detail": f"ACL {acl.name} sequence {ace.seq}",
+        "kind": "unreachable",
+        "acl": acl.name,
+        "sequence": ace.seq,
+        "ace": ace.text,
+    }
 
 
 def _covered_by_any(acl: Any, ace: Any) -> bool:

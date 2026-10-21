@@ -83,10 +83,10 @@ summarize_apt() {
   local file="$1"
   local certs
   certs="$(grep -c 'Replacing debian:' "$file" || true)"
+  grep -vE 'Replacing debian:|Reading database|needrestart|Pending kernel upgrade|Restarting services|No containers need to be restarted|No user sessions are running outdated binaries|No VM guests are running outdated hypervisor|Service restarts being deferred' "$file" >>"$LOG" || true
   if [[ "${certs}" -gt 0 ]]; then
     log "apt replaced ${certs} certificate files"
   fi
-  grep -vE 'Replacing debian:|needrestart|Pending kernel upgrade|Restarting services|No containers need to be restarted|No user sessions are running outdated binaries|No VM guests are running outdated hypervisor|Service restarts being deferred' "$file" >>"$LOG" || true
 }
 
 apt_logged() {

@@ -1,3 +1,4 @@
+from dryrun_lab.acls import parse_acls
 from dryrun_lab.configedit import apply_config_lines
 from dryrun_lab.nsort import interface_key
 from dryrun_lab.showfmt import normalize_command, parse_flow, show_ip_interface_brief, show_vlan_brief
@@ -30,8 +31,9 @@ def test_unnumbered_acl_line_appends_after_permit() -> None:
         ],
     )
     assert updated.index("permit ip any any") < updated.index("deny ip 10.30.30.0")
-    assert " 10 permit ip any any" in updated
-    assert " 20 deny ip 10.30.30.0 0.0.0.255 10.99.0.0 0.0.0.255" in updated
+    assert " 10 permit" not in updated
+    assert " 20 deny" not in updated
+    assert [ace.seq for ace in parse_acls(updated)[0].aces] == [10, 20]
 
 
 def test_trunk_add_keeps_existing_vlans() -> None:

@@ -68,6 +68,7 @@ bin/dryrun-lab host list
 bin/dryrun-lab host delete PC40
 bin/dryrun-lab link add PC40 Ethernet0 SW2 Gi0/12
 bin/dryrun-lab link list
+bin/dryrun-lab link unconfirm LINK_ID
 bin/dryrun-lab link delete LINK_ID
 ```
 
@@ -78,9 +79,9 @@ bin/dryrun-lab show R1 $'configure terminal\ninterface GigabitEthernet0/0\n shut
 bin/dryrun-lab show R1 revert
 ```
 
-The same commands work in the page's device CLI. Interface lists sort in natural port order: Gi1/0/2 before Gi1/0/10. `show access-lists` prints sequence numbers. An ACL line without a number is appended. A line that starts with a number is inserted there.
+The same commands work in the page's device CLI. Interface lists sort in natural port order: Gi1/0/2 before Gi1/0/10. `show access-lists` prints sequence numbers. An ACL line without a number is appended. A line that starts with a number is inserted there. `show running-config` leaves a line unnumbered unless you typed the number, resequence wrote it, or omitting it would change the sequence.
 
-A host is an end device with an interface address and `ip default-gateway`. `host add` creates one. `link add` draws a confirmed cable. Suggested cables are not used for layer 1. Confirm them with `confirm LINK_ID` after `links`. Dismiss a suggestion with `dismiss LINK_ID`. A host ping needs every cable on its path confirmed, including the cables `link add` created and the office trunks you confirm. `ping` and `traceroute` print one sentence under the disposition, and a drop names the ACL sequence. A trace that starts on a host also prints the layer-2 path across those confirmed links. Switches named there are not hops in the computed trace.
+A host is an end device with an interface address and `ip default-gateway`. `host add` creates one. `link add` draws a confirmed cable and places the host under the device that cable attaches to. Suggested cables are not used for layer 1. Confirm them with `confirm LINK_ID` after `links`. `link unconfirm LINK_ID` sets a confirmed cable back to suggested. A drawn cable stays listed. An inferred cable comes back as a suggestion. Dismiss a suggestion with `dismiss LINK_ID`. A host ping needs every cable on its path confirmed, including the cables `link add` created and the office trunks you confirm. `ping` and `traceroute` print one sentence under the disposition, and a drop names the ACL sequence. A trace that starts on a host also prints the layer-2 path across those confirmed links. Switches named there are not hops in the computed trace.
 
 ## VLAN 40 host path
 

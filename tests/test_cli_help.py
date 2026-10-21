@@ -14,6 +14,10 @@ def test_host_and_link_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert link_help.value.code == 0
     link = capsys.readouterr().out
     assert "a_interface" in link and "b_interface" in link
+    with pytest.raises(SystemExit) as unconfirm_help:
+        main(["link", "unconfirm", "--help"])
+    assert unconfirm_help.value.code == 0
+    assert "link_id" in capsys.readouterr().out
 
 
 def test_help_keeps_the_full_disclaimer(capsys: pytest.CaptureFixture[str]) -> None:

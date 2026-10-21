@@ -13,6 +13,10 @@ from dryrun_lab.engine import Engine
 from dryrun_lab.examples import load_office_lab
 from dryrun_lab.store import Device, add_user_link, place_host
 
+def _warnings_section(text: str) -> str:
+    return text.split("\nWarnings\n", 1)[1].split("\nReachability\n", 1)[0]
+
+
 def _engine_up() -> bool:
     probe = socket.socket()
     try:
@@ -164,6 +168,11 @@ def _vlan_acl_and_trunk(engine: Engine, lab) -> None:
     assert lists.index("    10 deny") < lists.index("    20 deny") < lists.index(f"    25 {guest}")
     assert lists.index(f"    25 {guest}") < lists.index("    30 permit ip any any")
     assert "line " not in lists
+    running = _run(engine, lab, "R1", "show running-config")
+    assert f" 25 {guest}" in running
+    assert " 10 deny" not in running
+    assert " 20 deny" not in running
+    assert " 30 permit" not in running
     reverted = _run(engine, lab, "R1", "revert")
     assert "Reverted one edit. Recomputed." in reverted
     assert "Applied 1 line" not in reverted
@@ -194,8 +203,17 @@ def _vlan_acl_and_trunk(engine: Engine, lab) -> None:
         ),
     )
     assert "Line added at sequence 40, after sequence 30 permit ip any any; it will never match." in warned
+    added_warnings = _warnings_section(warned)
+    assert "Line added at sequence 40, after sequence 30 permit ip any any; it will never match." in added_warnings
+    assert any(line.startswith("  + ") and "never match" in line for line in added_warnings.splitlines())
+    assert "(no warning changes)" not in added_warnings
+    assert any(row.get("kind") == "unreachable" and "never match" in str(row.get("text")) for row in lab.warnings)
     lists = _run(engine, lab, "R1", "show access-lists")
     assert lists.index("    30 permit ip any any") < lists.index(f"    40 {guest}")
+    running = _run(engine, lab, "R1", "show running-config")
+    assert guest in running
+    assert " 40 deny" not in running
+    assert f" 40 {guest}" not in running
     still = _run(
         engine,
         lab,
@@ -205,7 +223,12 @@ def _vlan_acl_and_trunk(engine: Engine, lab) -> None:
     assert "100 percent" in still
     assert "ACCEPTED" in still
     assert "Dropped" not in still
-    _run(engine, lab, "R1", "revert")
+    cleared = _run(engine, lab, "R1", "revert")
+    removed_warnings = _warnings_section(cleared)
+    assert "Line added at sequence 40, after sequence 30 permit ip any any; it will never match." in removed_warnings
+    assert any(line.startswith("  - ") and "never match" in line for line in removed_warnings.splitlines())
+    assert "(no warning changes)" not in removed_warnings
+    assert not any(row.get("kind") == "unreachable" for row in lab.warnings)
     assert lab.device("R1").config == baseline["R1"]
 
     ospf = _run(engine, lab, "R1", "traceroute 10.255.1.1 source 10.50.0.1")
@@ -350,6 +373,12 @@ def test_host_on_vlan_40_reaches_server_until_the_sw1_sw2_trunk_is_down() -> Non
         _confirm_pair(lab, "SW1", "SW3")
         add_user_link(lab, "PC40", "Ethernet0", "SW2", "GigabitEthernet0/12")
         add_user_link(lab, "SRV20", "Ethernet0", "SW3", "GigabitEthernet0/10")
+        sw3 = lab.device("SW3")
+        srv20 = lab.device("SRV20")
+        assert sw3 is not None and srv20 is not None
+        assert pc40.x == sw2.x
+        assert srv20.x == sw3.x
+        assert srv20.y >= sw3.y + 48 + 12 + 64
         engine.recompute(lab)
         assert lab.engine_error is None, lab.engine_error
         reached = _run(engine, lab, "PC40", "ping 10.20.20.50")

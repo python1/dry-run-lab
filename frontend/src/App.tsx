@@ -108,7 +108,10 @@ export default function App() {
   const suggestions = lab?.links.filter((link) => link.status === "suggested") ?? [];
   const unsimulated = device?.unsimulated ?? [];
   const limits = unsimulated.filter((row) => row.kind === "limit");
-  const missed = unsimulated.filter((row) => row.kind !== "ignored" && row.kind !== "limit");
+  const unreachable = unsimulated.filter((row) => row.kind === "unreachable");
+  const missed = unsimulated.filter(
+    (row) => row.kind !== "ignored" && row.kind !== "limit" && row.kind !== "unreachable",
+  );
   const ignored = unsimulated.filter((row) => row.kind === "ignored");
 
   return (
@@ -221,10 +224,19 @@ export default function App() {
                   <span>{item.name}</span>
                   <Badge tone={item.role === "router" ? "amber" : item.role === "host" ? "moss" : "steel"}>{item.role}</Badge>
                 </span>
-                {item.unsimulated.some((row) => row.kind !== "ignored" && row.kind !== "limit") && (
+                {item.unsimulated.some(
+                  (row) => row.kind !== "ignored" && row.kind !== "limit" && row.kind !== "unreachable",
+                ) && (
                   <Badge tone="coral">
-                    {item.unsimulated.filter((row) => row.kind !== "ignored" && row.kind !== "limit").length}
+                    {
+                      item.unsimulated.filter(
+                        (row) => row.kind !== "ignored" && row.kind !== "limit" && row.kind !== "unreachable",
+                      ).length
+                    }
                   </Badge>
+                )}
+                {item.unsimulated.some((row) => row.kind === "unreachable") && (
+                  <Badge tone="amber">never matches</Badge>
                 )}
                 {item.unsimulated.some((row) => row.kind === "ignored") && (
                   <Badge tone="amber">ignored</Badge>
@@ -344,7 +356,20 @@ export default function App() {
                   </ul>
                 </div>
               )}
-              {missed.length === 0 && ignored.length === 0 && limits.length === 0 ? (
+              {unreachable.length > 0 && (
+                <div className="rounded-md border border-amber/60 bg-amber/10 p-3">
+                  <h3 className="text-sm font-semibold text-amber">Will never match</h3>
+                  <ul className="mt-2 space-y-2">
+                    {unreachable.map((row, index) => (
+                      <li key={`${row.text}-${index}`} className="text-xs">
+                        <div className="font-mono text-amber">{row.text}</div>
+                        <div className="text-paper/80">{row.detail}</div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {missed.length === 0 && ignored.length === 0 && limits.length === 0 && unreachable.length === 0 ? (
                 <div className="rounded-md border border-line p-3">
                   <h3 className="text-sm font-semibold text-paper">Lines the engine did not model</h3>
                   <p className="mt-2 text-xs text-muted">No unparsed lines reported for this device.</p>

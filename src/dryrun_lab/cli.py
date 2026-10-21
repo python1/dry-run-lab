@@ -70,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     link_add.add_argument("b_interface")
     link_delete = link_sub.add_parser("delete", help="Delete a cable so it is not inferred again")
     link_delete.add_argument("link_id")
+    link_unconfirm = link_sub.add_parser("unconfirm", help="Set a confirmed cable back to suggested")
+    link_unconfirm.add_argument("link_id")
     link_sub.add_parser("list", help="List cables, including suggestions")
 
     args = parser.parse_args(argv)
@@ -122,7 +124,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{'NAME':<12} {'ROLE':<8} {'INTERFACES':<12} {'NOT SIMULATED':<16} IGNORED")
             for device in lab.get("devices") or []:
                 rows = device.get("unsimulated") or []
-                missed = sum(1 for row in rows if row.get("kind") not in {"ignored", "limit"})
+                missed = sum(
+                    1 for row in rows if row.get("kind") not in {"ignored", "limit", "unreachable"}
+                )
                 ignored = sum(1 for row in rows if row.get("kind") == "ignored")
                 print(
                     f"{device['name']:<12} {device['role']:<8} "
@@ -187,12 +191,16 @@ def main(argv: list[str] | None = None) -> int:
             elif args.link_cmd == "delete":
                 _request(args.url, "DELETE", f"/api/links/{args.link_id}")
                 print(f"deleted {args.link_id}")
+            elif args.link_cmd == "unconfirm":
+                _request(args.url, "POST", f"/api/links/{args.link_id}/unconfirm")
+                print(f"suggested {args.link_id}")
             else:
                 lab = _request(args.url, "GET", "/api/lab")
                 _print_links(lab)
         elif args.cmd == "warnings":
             lab = _request(args.url, "GET", "/api/lab")
             found = _print_warnings(lab, args.device, "missed", "These lines were NOT simulated")
+            found = _print_warnings(lab, args.device, "unreachable", "Will never match") or found
             found = _print_warnings(
                 lab,
                 args.device,
@@ -298,7 +306,7 @@ def _warning_counts(lab: dict) -> tuple[int, int]:
         for row in device.get("unsimulated") or []:
             if row.get("kind") == "ignored":
                 ignored += 1
-            elif row.get("kind") != "limit":
+            elif row.get("kind") not in {"limit", "unreachable"}:
                 missed += 1
     return missed, ignored
 
@@ -316,7 +324,9 @@ def _print_warnings(lab: dict, device_name: str | None, kind: str, heading: str)
                 rows.append(row)
             elif kind == "limit" and row_kind == "limit":
                 rows.append(row)
-            elif kind == "missed" and row_kind not in {"ignored", "limit"}:
+            elif kind == "unreachable" and row_kind == "unreachable":
+                rows.append(row)
+            elif kind == "missed" and row_kind not in {"ignored", "limit", "unreachable"}:
                 rows.append(row)
         if not rows:
             continue

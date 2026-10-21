@@ -26,8 +26,9 @@ _PROTOCOL = {
 
 
 def show_running_config(config: str, unsimulated: list[dict[str, Any]]) -> str:
-    missed = [row for row in unsimulated if row.get("kind") not in {"ignored", "limit"}]
+    missed = [row for row in unsimulated if row.get("kind") not in {"ignored", "limit", "unreachable"}]
     ignored = [row for row in unsimulated if row.get("kind") == "ignored"]
+    unreachable = [row for row in unsimulated if row.get("kind") == "unreachable"]
     lines = [
         "! Loaded config. This is the text the lab simulated, not a live readout.",
     ]
@@ -38,6 +39,8 @@ def show_running_config(config: str, unsimulated: list[dict[str, Any]]) -> str:
         )
     else:
         lines.append("! No unparsed lines were reported for this device.")
+    if unreachable:
+        lines.append(f"! {len(unreachable)} ACL line(s) will never match.")
     if ignored:
         lines.append(
             f"! {len(ignored)} line(s) ignored when ip routing is enabled."
@@ -136,11 +139,21 @@ def _warning_lines(rows: list[dict[str, Any]]) -> list[str]:
 def show_unsimulated(device: str, rows: list[dict[str, Any]]) -> str:
     ignored = [row for row in rows if row.get("kind") == "ignored"]
     limits = [row for row in rows if row.get("kind") == "limit"]
-    missed = [row for row in rows if row.get("kind") not in {"ignored", "limit"}]
-    if not ignored and not missed and not limits:
+    unreachable = [row for row in rows if row.get("kind") == "unreachable"]
+    missed = [row for row in rows if row.get("kind") not in {"ignored", "limit", "unreachable"}]
+    if not ignored and not missed and not limits and not unreachable:
         return f"No unparsed lines were reported for {device}\n"
     lines: list[str] = []
+    if unreachable:
+        lines.append(f"Will never match on {device}")
+        lines.append("")
+        for row in unreachable:
+            lines.append(f"  {row.get('text') or ''}".rstrip())
+            if row.get("detail"):
+                lines.append(f"    {row['detail']}")
     if missed:
+        if lines:
+            lines.append("")
         lines.append(f"These lines were NOT simulated on {device}")
         lines.append("")
         lines.extend(_warning_lines(missed))
