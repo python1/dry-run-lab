@@ -99,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{'NAME':<12} {'ROLE':<8} {'INTERFACES':<12} {'NOT SIMULATED':<16} IGNORED")
             for device in lab.get("devices") or []:
                 rows = device.get("unsimulated") or []
-                missed = sum(1 for row in rows if row.get("kind") != "ignored")
+                missed = sum(1 for row in rows if row.get("kind") not in {"ignored", "limit"})
                 ignored = sum(1 for row in rows if row.get("kind") == "ignored")
                 print(
                     f"{device['name']:<12} {device['role']:<8} "
@@ -110,25 +110,29 @@ def main(argv: list[str] | None = None) -> int:
                 print("(no devices)")
         elif args.cmd == "links":
             lab = _request(args.url, "GET", "/api/lab")
-            print(f"{'ID':<10} {'STATUS':<12} {'A':<28} {'B':<28} WHY")
+            print(f"{'ID':<10} {'STATUS':<16} {'A':<28} {'B':<28} WHY")
             for link in lab.get("links") or []:
                 left = f"{link['aDevice']} {link['aInterface']}"
                 right = f"{link['bDevice']} {link['bInterface']}"
                 why = link.get("reason") or link.get("source") or ""
-                print(f"{link['id']:<10} {link['status']:<12} {left:<28} {right:<28} {why}")
+                status = link.get("status") or ""
+                if link.get("down"):
+                    status = f"{status} down"
+                print(f"{link['id']:<10} {status:<16} {left:<28} {right:<28} {why}")
             for note in lab.get("notes") or []:
                 print(f"note: {note}")
             if not lab.get("links"):
                 print("(no links)")
         elif args.cmd == "warnings":
             lab = _request(args.url, "GET", "/api/lab")
-            found = _print_warnings(lab, args.device, ignored=False, heading="These lines were NOT simulated")
+            found = _print_warnings(lab, args.device, "missed", "These lines were NOT simulated")
             found = _print_warnings(
                 lab,
                 args.device,
-                ignored=True,
-                heading="Ignored when ip routing is enabled",
+                "ignored",
+                "Ignored when ip routing is enabled",
             ) or found
+            found = _print_warnings(lab, args.device, "limit", "Not modeled") or found
             if not found:
                 print("(none reported)")
         elif args.cmd == "show":
@@ -167,22 +171,26 @@ def _warning_counts(lab: dict) -> tuple[int, int]:
         for row in device.get("unsimulated") or []:
             if row.get("kind") == "ignored":
                 ignored += 1
-            else:
+            elif row.get("kind") != "limit":
                 missed += 1
     return missed, ignored
 
 
-def _print_warnings(lab: dict, device_name: str | None, ignored: bool, heading: str) -> bool:
+def _print_warnings(lab: dict, device_name: str | None, kind: str, heading: str) -> bool:
     printed = False
     any_row = False
     for device in lab.get("devices") or []:
         if device_name and device["name"].lower() != device_name.lower():
             continue
-        rows = [
-            row
-            for row in (device.get("unsimulated") or [])
-            if (row.get("kind") == "ignored") is ignored
-        ]
+        rows = []
+        for row in device.get("unsimulated") or []:
+            row_kind = row.get("kind")
+            if kind == "ignored" and row_kind == "ignored":
+                rows.append(row)
+            elif kind == "limit" and row_kind == "limit":
+                rows.append(row)
+            elif kind == "missed" and row_kind not in {"ignored", "limit"}:
+                rows.append(row)
         if not rows:
             continue
         if not printed:
@@ -192,8 +200,10 @@ def _print_warnings(lab: dict, device_name: str | None, ignored: bool, heading: 
         print(f"\n{device['name']}")
         for row in rows:
             line = row.get("line")
-            where = f"line {line}" if line else "line ?"
-            print(f"  {where}: {row.get('text')}")
+            if line:
+                print(f"  line {line}: {row.get('text')}")
+            else:
+                print(f"  {row.get('text')}")
             if row.get("detail"):
                 print(f"    {row['detail']}")
     if any_row:

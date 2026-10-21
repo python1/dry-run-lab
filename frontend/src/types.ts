@@ -1,4 +1,4 @@
-export type Role = "router" | "switch";
+export type Role = "router" | "switch" | "host";
 
 export interface Iface {
   name: string;
@@ -38,6 +38,7 @@ export interface Link {
   status: "suggested" | "confirmed";
   source: string;
   reason: string;
+  down?: boolean;
 }
 
 export interface Lab {

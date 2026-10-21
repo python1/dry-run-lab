@@ -72,4 +72,10 @@ bin/dryrun-lab show R1 revert
 
 The same commands work in the page's device CLI. Interface lists sort in natural port order: Gi1/0/2 before Gi1/0/10.
 
+A host is an end device with an interface address and `ip default-gateway`. Only a cable confirmed on the canvas is written into the layer-1 topology. Suggested cables are not used. `ping` and `traceroute` print one sentence under the disposition. A trace that starts on a host also prints the layer-2 path across those confirmed links. Switches named there are not hops in the computed trace.
+
+```bash
+bin/dryrun-lab show PC40 "ping 10.20.20.50"
+```
+
 Computed results are a simulation from these configs. They are not proof that a live network will behave the same way. Not affiliated with or endorsed by Cisco.

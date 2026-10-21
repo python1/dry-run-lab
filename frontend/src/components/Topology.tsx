@@ -331,7 +331,7 @@ export function Topology({
                 width={CARD_W}
                 height={HEADER_H}
                 rx="12"
-                fill={device.role === "router" ? "#3a3018" : "#1c2a30"}
+                fill={device.role === "router" ? "#3a3018" : device.role === "host" ? "#243024" : "#1c2a30"}
                 onPointerDown={(event) => {
                   event.stopPropagation();
                   const svg = svgRef.current;
@@ -351,7 +351,7 @@ export function Topology({
                 {device.name}
               </text>
               <text x={CARD_W - 16} y="30" textAnchor="end" fill="#d5d8c8" fontSize="14" fontFamily="ui-sans-serif, system-ui, sans-serif">
-                {device.role === "router" ? "router" : "switch"}
+                {device.role}
               </text>
               {ports.map((iface, index) => {
                 const armed = pending?.device === device.name && pending.iface === iface.name;
@@ -369,7 +369,12 @@ export function Topology({
                     <text x="16" y="18" fill="#f4ecda" fontSize="15" fontFamily="ui-monospace, monospace">
                       {short(iface.name)}
                     </text>
-                    <circle cx={CARD_W - 18} cy="13" r={armed ? 8 : 6} fill={armed ? "#e2a84a" : "#8fbf78"} />
+                    <circle
+                      cx={CARD_W - 18}
+                      cy="13"
+                      r={armed ? 8 : 6}
+                      fill={armed ? "#e2a84a" : iface.shutdown ? "#e15b45" : "#8fbf78"}
+                    />
                   </g>
                 );
               })}
@@ -535,7 +540,8 @@ function layoutCables(links: Link[], anchors: Map<string, Pt>, cards: Map<string
       const seen = visibleMid(sample, cardRects);
       const stagger = (index - (list.length - 1) / 2) * 30;
       const suggested = link.status === "suggested";
-      const label = `${short(link.aInterface)}–${short(link.bInterface)} ${suggested ? "suggested" : "link"}`;
+      const down = Boolean(link.down);
+      const label = `${short(link.aInterface)}–${short(link.bInterface)} ${down ? "down" : suggested ? "suggested" : "link"}`;
       const placed = placeLabel({ x: seen.x, y: seen.y + stagger }, normal, label, occupied);
       occupied.push({
         x: placed.x - placed.w / 2,
@@ -548,9 +554,9 @@ function layoutCables(links: Link[], anchors: Map<string, Pt>, cards: Map<string
         d: curved
           ? `M ${a.x} ${a.y} Q ${control.x} ${control.y} ${b.x} ${b.y}`
           : `M ${a.x} ${a.y} L ${b.x} ${b.y}`,
-        color: suggested ? "#e2a84a" : "#8fbf78",
-        width: suggested ? 2 : 3.5,
-        dash: suggested ? "8 6" : undefined,
+        color: down ? "#e15b45" : suggested ? "#e2a84a" : "#8fbf78",
+        width: down ? 3 : suggested ? 2 : 3.5,
+        dash: down ? "7 6" : suggested ? "8 6" : undefined,
         label,
         labelX: placed.x,
         labelY: placed.y,

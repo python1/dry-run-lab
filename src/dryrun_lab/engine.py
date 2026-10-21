@@ -13,9 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from dryrun_lab.configedit import apply_config_lines, prompt_for
-from dryrun_lab.configparse import canonical_interface
+from dryrun_lab.configparse import canonical_interface, parse_config
 from dryrun_lab.constants import COMPUTED_TAG, ENGINE_HOST, ENGINE_PORT
 from dryrun_lab.facts import annotate_warnings
+from dryrun_lab.hosts import host_document, host_limits
+from dryrun_lab.l2path import layer2_note
 from dryrun_lab.paths import data_home
 from dryrun_lab.probes import Probe, probes_for_acl, probes_for_lab
 from dryrun_lab.showfmt import (
@@ -54,9 +56,12 @@ class ShowResult:
 
 
 class Engine:
-    def __init__(self, host: str = ENGINE_HOST, port: int = ENGINE_PORT) -> None:
+    def __init__(self, host: str = ENGINE_HOST, port: int = ENGINE_PORT, network: str = "dryrun") -> None:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", network):
+            raise ValueError(network)
         self.host = host
         self.port = port
+        self.network = network
         self._lock = threading.Lock()
         self._session: Any = None
         self._interfaces: dict[str, list[dict[str, Any]]] = {}
@@ -76,6 +81,20 @@ class Engine:
         finally:
             probe.close()
 
+    def close(self) -> None:
+        """Delete a test network. The live lab network is left in place."""
+        if not self.network.startswith("dryrun-test-"):
+            return
+        try:
+            with self._lock:
+                session = self._client()
+                session.delete_network(self.network)
+        except Exception:
+            log.exception("could not delete test network %s", self.network)
+        finally:
+            self._session = None
+            self._ready = False
+
     def recompute(self, lab: Lab) -> None:
         if not lab.devices:
             self._interfaces = {}
@@ -93,7 +112,7 @@ class Engine:
             with self._lock:
                 snapshot = self._write_snapshot(lab)
                 session = self._client()
-                session.set_network("dryrun")
+                session.set_network(self.network)
                 session.init_snapshot(str(snapshot), name="lab", overwrite=True)
                 warnings = _warnings(session)
                 self._interfaces = _interfaces(session)
@@ -101,6 +120,8 @@ class Engine:
                 self._vlans = _vlans(session)
                 self._ready = True
             lab.warnings = _attach_devices(warnings, lab)
+            lab.warnings.extend(host_limits(lab))
+            _mark_link_state(lab, self._interfaces)
             lab.engine_error = None
         except Exception as exc:  # Batfish client raises its own types
             log.exception("recompute failed")
@@ -291,9 +312,13 @@ class Engine:
 
     def _flow_body(self, lab: Lab, device_name: str, flow: dict[str, str | None]) -> tuple[dict[str, Any], str | None]:
         trace = self._trace(device_name, str(flow["dst"]), flow.get("src"), flow.get("ingress"))
+        _rename_steps(lab, trace)
         drop = None
         if _denied(trace):
             drop = self._drop_line(lab, device_name, flow.get("src"), str(flow["dst"]))
+        note = layer2_note(lab, self._interfaces, device_name, str(flow["dst"]))
+        if note:
+            trace["l2"] = note
         return trace, drop
 
     def _reach_summary(self, lab: Lab, probe: Probe) -> str:
@@ -377,14 +402,29 @@ class Engine:
         return f"Dropped by ACL {acl}\n  {where}{text}\n"
 
     def _write_snapshot(self, lab: Lab) -> Path:
-        root = data_home() / "snapshot"
+        root = data_home() / "snapshots" / _safe_name(self.network)
         if root.exists():
             shutil.rmtree(root)
         configs = root / "configs"
         configs.mkdir(parents=True)
+        hosts = root / "hosts"
+        wrote_host = False
         for device in lab.devices:
             safe = _safe_name(device.name)
+            if device.role == "host":
+                document = host_document(device.name, device.config)
+                if document is None:
+                    continue
+                hosts.mkdir(exist_ok=True)
+                (hosts / f"{safe.lower()}.json").write_text(
+                    json.dumps(document, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                wrote_host = True
+                continue
             (configs / f"{safe}.cfg").write_text(device.config, encoding="utf-8")
+        if not wrote_host and hosts.exists():
+            shutil.rmtree(hosts)
         edges = []
         for link in lab.links:
             if link.status != "confirmed":
@@ -406,6 +446,38 @@ def _wrap(device: str, command: str, body: str) -> str:
 def _safe_name(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]", "_", name)
     return cleaned or "device"
+
+
+def _rename_steps(lab: Lab, trace: dict[str, Any]) -> None:
+    for step in trace.get("steps") or []:
+        device = lab.device(str(step.get("node") or ""))
+        if device is not None:
+            step["node"] = device.name
+
+
+def _mark_link_state(lab: Lab, interfaces: dict[str, list[dict[str, Any]]]) -> None:
+    index: dict[tuple[str, str], dict[str, Any]] = {}
+    for node, rows in interfaces.items():
+        for row in rows:
+            index[(node.lower(), canonical_interface(str(row.get("name") or "")).lower())] = row
+    for link in lab.links:
+        down = False
+        for device_name, iface_name in (
+            (link.a_device, link.a_interface),
+            (link.b_device, link.b_interface),
+        ):
+            row = index.get((device_name.lower(), canonical_interface(iface_name).lower()))
+            if row is not None:
+                if row.get("admin_up") is False or row.get("active") is False:
+                    down = True
+                continue
+            device = lab.device(device_name)
+            if device is None:
+                continue
+            parsed = parse_config(device.config).get(iface_name)
+            if parsed is not None and parsed.shutdown:
+                down = True
+        link.down = down
 
 
 def _edge(link: Link) -> dict[str, Any]:

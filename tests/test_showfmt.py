@@ -1,4 +1,4 @@
-from dryrun_lab.showfmt import normalize_command, show_ip_interface_brief, show_ip_route
+from dryrun_lab.showfmt import format_ping, normalize_command, show_ip_interface_brief, show_ip_route
 
 
 def test_command_aliases() -> None:
@@ -67,3 +67,50 @@ def test_route_table_uses_computed_hops() -> None:
     assert "S*    0.0.0.0/0 [1/0] via 192.0.2.2" in text
     assert "C     10.10.10.0/24 is directly connected, GigabitEthernet0/0.10" in text
     assert "O     10.255.1.1/32 [110/2] via 10.50.0.2, GigabitEthernet0/2" in text
+
+
+def test_disposition_sentence_names_the_acl_line() -> None:
+    text = format_ping(
+        "10.99.0.1",
+        "10.30.30.50",
+        "GigabitEthernet0/0.30",
+        {
+            "disposition": "DENIED_IN",
+            "steps": [
+                {
+                    "node": "R1",
+                    "action": "DENIED",
+                    "detail": {
+                        "inputInterface": "GigabitEthernet0/0.30",
+                        "filter": "GUEST-IN",
+                        "filterType": "INGRESS_FILTER",
+                    },
+                }
+            ],
+        },
+        "Dropped by ACL GUEST-IN\n  line 10: deny ip 10.30.30.0 0.0.0.255 10.99.0.0 0.0.0.255\n",
+    )
+    assert (
+        "Dropped because ACL GUEST-IN line 10 on R1 Gi0/0.30 denies 10.30.30.0/24 to 10.99.0.0/24."
+        in text
+    )
+
+
+def test_neighbor_unreachable_names_the_interface() -> None:
+    text = format_ping(
+        "10.20.20.50",
+        None,
+        None,
+        {
+            "disposition": "NEIGHBOR_UNREACHABLE",
+            "steps": [
+                {
+                    "node": "PC40",
+                    "action": "NEIGHBOR_UNREACHABLE",
+                    "detail": {"outputInterface": "Ethernet0", "resolvedNexthopIp": "10.40.40.1"},
+                }
+            ],
+        },
+        None,
+    )
+    assert "No neighbor answered for 10.40.40.1 on PC40 Ethernet0." in text

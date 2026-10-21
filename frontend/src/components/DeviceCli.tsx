@@ -1,6 +1,6 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "../api";
 import type { Lab } from "../types";
@@ -8,6 +8,9 @@ import type { Lab } from "../types";
 export function DeviceCli({ device, onLab }: { device: string | null; onLab?: (lab: Lab) => void }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const thumbRef = useRef<HTMLDivElement>(null);
+  const syncRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const host = hostRef.current;
@@ -34,15 +37,39 @@ export function DeviceCli({ device, onLab }: { device: string | null; onLab?: (l
     term.open(host);
 
     let minCols = 80;
+    const contentWidth = () => {
+      const canvas = host.querySelector(".xterm-text-layer");
+      if (canvas instanceof HTMLCanvasElement && canvas.style.width) {
+        const parsed = Number.parseFloat(canvas.style.width);
+        if (parsed > 0) return parsed;
+      }
+      return scroll.clientWidth;
+    };
+    const syncThumb = () => {
+      const bar = barRef.current;
+      const thumb = thumbRef.current;
+      if (!bar || !thumb) return;
+      const max = scroll.scrollWidth - scroll.clientWidth;
+      const barWidth = bar.clientWidth;
+      if (max <= 1 || barWidth <= 0) {
+        thumb.style.width = `${Math.max(barWidth, 0)}px`;
+        thumb.style.transform = "translateX(0px)";
+        return;
+      }
+      const thumbW = Math.max(48, (scroll.clientWidth / scroll.scrollWidth) * barWidth);
+      const left = (scroll.scrollLeft / max) * (barWidth - thumbW);
+      thumb.style.width = `${thumbW}px`;
+      thumb.style.transform = `translateX(${left}px)`;
+    };
+    syncRef.current = syncThumb;
     const layout = () => {
       host.style.width = `${Math.max(scroll.clientWidth, 1)}px`;
       const proposed = fit.proposeDimensions();
       const cols = Math.max(proposed?.cols ?? 80, minCols);
       const rows = Math.max(proposed?.rows ?? 12, 8);
       if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows);
-      const screen = host.querySelector(".xterm-screen");
-      const width = screen instanceof HTMLElement ? screen.offsetWidth : scroll.clientWidth;
-      host.style.width = `${Math.max(width, scroll.clientWidth)}px`;
+      host.style.width = `${Math.max(contentWidth(), scroll.clientWidth)}px`;
+      syncThumb();
     };
 
     const writeBlock = (text: string) => {
@@ -58,6 +85,7 @@ export function DeviceCli({ device, onLab }: { device: string | null; onLab?: (l
     layout();
     const observer = new ResizeObserver(() => layout());
     observer.observe(scroll);
+    scroll.addEventListener("scroll", syncThumb);
 
     let buffer = "";
     const promptRef = { current: `${device ?? "lab"}# ` };
@@ -131,13 +159,58 @@ export function DeviceCli({ device, onLab }: { device: string | null; onLab?: (l
     return () => {
       disposable.dispose();
       observer.disconnect();
+      scroll.removeEventListener("scroll", syncThumb);
       term.dispose();
     };
   }, [device, onLab]);
 
+  const onBarPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const scroll = scrollRef.current;
+    const bar = barRef.current;
+    const thumb = thumbRef.current;
+    if (!scroll || !bar || !thumb) return;
+    event.preventDefault();
+    const barRect = bar.getBoundingClientRect();
+    const thumbRect = thumb.getBoundingClientRect();
+    const max = Math.max(0, scroll.scrollWidth - scroll.clientWidth);
+    const onThumb = event.clientX >= thumbRect.left && event.clientX <= thumbRect.right;
+    if (!onThumb && barRect.width > 0) {
+      scroll.scrollLeft = ((event.clientX - barRect.left) / barRect.width) * max;
+      syncRef.current();
+    }
+    const startX = event.clientX;
+    const startLeft = scroll.scrollLeft;
+    const span = Math.max(1, barRect.width - thumbRect.width);
+    const move = (ev: PointerEvent) => {
+      if (max <= 0) return;
+      scroll.scrollLeft = startLeft + ((ev.clientX - startX) / span) * max;
+      syncRef.current();
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
   return (
-    <div ref={scrollRef} className="device-cli-scroll h-full w-full">
-      <div ref={hostRef} className="h-full" />
+    <div className="flex h-full min-h-0 w-full flex-col">
+      <div ref={scrollRef} className="device-cli-scroll min-h-0 w-full flex-1">
+        <div ref={hostRef} className="h-full" />
+      </div>
+      <div
+        ref={barRef}
+        className="terminal-hscroll"
+        role="scrollbar"
+        aria-orientation="horizontal"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label="Terminal horizontal scroll"
+        onPointerDown={onBarPointerDown}
+      >
+        <div ref={thumbRef} className="terminal-hscroll-thumb" />
+      </div>
     </div>
   );
 }

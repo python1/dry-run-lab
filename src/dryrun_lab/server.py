@@ -153,8 +153,8 @@ def import_lab(body: ImportIn) -> dict:
     lab = Lab(name=body.name)
     for item in body.devices:
         _check_name(item.name)
-        if item.role not in {"router", "switch"}:
-            raise HTTPException(400, "Role must be router or switch")
+        if item.role not in _ROLES:
+            raise HTTPException(400, "Role must be router, switch, or host")
         lab.devices.append(
             Device(
                 name=item.name,
@@ -176,12 +176,12 @@ def import_lab(body: ImportIn) -> dict:
 @app.post("/api/devices")
 def add_device(body: DeviceIn) -> dict:
     _check_name(body.name)
-    if body.role not in {"router", "switch"}:
-        raise HTTPException(400, "Role must be router or switch")
+    if body.role not in _ROLES:
+        raise HTTPException(400, "Role must be router, switch, or host")
     with _store.lock:
         if _store.lab.device(body.name):
             raise HTTPException(409, "A device with that name already exists")
-        config = body.config or f"hostname {body.name}\n!\n"
+        config = body.config or _blank_config(body.name, body.role)
         _store.lab.devices.append(
             Device(
                 name=body.name,
@@ -214,7 +214,7 @@ def update_device(name: str, body: DeviceUpdate) -> dict:
         if body.neighborText is not None and body.neighborText != device.neighbor_text:
             device.neighbor_text = body.neighborText
             structural = True
-        if body.role in {"router", "switch"}:
+        if body.role in _ROLES:
             device.role = body.role
         if body.x is not None:
             device.x = body.x
@@ -300,6 +300,25 @@ def show(body: ShowIn) -> JSONResponse:
         if result.changed:
             payload["lab"] = _payload()
     return JSONResponse(payload)
+
+
+_ROLES = {"router", "switch", "host"}
+
+
+def _blank_config(name: str, role: str) -> str:
+    if role == "host":
+        return (
+            f"hostname {name}\n"
+            "!\n"
+            "interface Ethernet0\n"
+            " description host port\n"
+            " ip address 10.0.0.50 255.255.255.0\n"
+            "!\n"
+            "ip default-gateway 10.0.0.1\n"
+            "!\n"
+            "end\n"
+        )
+    return f"hostname {name}\n!\n"
 
 
 def _check_name(name: str) -> None:

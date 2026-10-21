@@ -26,7 +26,7 @@ _PROTOCOL = {
 
 
 def show_running_config(config: str, unsimulated: list[dict[str, Any]]) -> str:
-    missed = [row for row in unsimulated if row.get("kind") != "ignored"]
+    missed = [row for row in unsimulated if row.get("kind") not in {"ignored", "limit"}]
     ignored = [row for row in unsimulated if row.get("kind") == "ignored"]
     lines = [
         "! Loaded config. This is the text the lab simulated, not a live readout.",
@@ -135,8 +135,9 @@ def _warning_lines(rows: list[dict[str, Any]]) -> list[str]:
 
 def show_unsimulated(device: str, rows: list[dict[str, Any]]) -> str:
     ignored = [row for row in rows if row.get("kind") == "ignored"]
-    missed = [row for row in rows if row.get("kind") != "ignored"]
-    if not ignored and not missed:
+    limits = [row for row in rows if row.get("kind") == "limit"]
+    missed = [row for row in rows if row.get("kind") not in {"ignored", "limit"}]
+    if not ignored and not missed and not limits:
         return f"No unparsed lines were reported for {device}\n"
     lines: list[str] = []
     if missed:
@@ -149,6 +150,12 @@ def show_unsimulated(device: str, rows: list[dict[str, Any]]) -> str:
         lines.append(f"Ignored when ip routing is enabled on {device}")
         lines.append("")
         lines.extend(_warning_lines(ignored))
+    if limits:
+        if lines:
+            lines.append("")
+        lines.append(f"Not modeled on {device}")
+        lines.append("")
+        lines.extend(_warning_lines(limits))
     return "\n".join(lines) + "\n"
 
 
@@ -236,10 +243,13 @@ def format_ping(dst: str, src: str | None, ingress: str | None, trace: dict[str,
         "!!!!!" if ok else ".....",
         f"Success rate is {'100 percent (5/5)' if ok else '0 percent (0/5)'}",
         f"Disposition: {trace.get('disposition') or trace.get('error') or 'none'}",
+        explain_disposition(trace, drop, dst),
         _format_steps(trace),
     ]
     if drop:
-        lines.append(drop)
+        lines.append(drop.rstrip("\n"))
+    if trace.get("l2"):
+        lines.append(str(trace["l2"]))
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -253,11 +263,152 @@ def format_traceroute(dst: str, src: str | None, ingress: str | None, trace: dic
         "Computed traceroute. Not a packet on a live network.",
         where,
         f"Disposition: {trace.get('disposition') or trace.get('error') or 'none'}",
+        explain_disposition(trace, drop, dst),
         _format_steps(trace),
     ]
     if drop:
-        lines.append(drop)
+        lines.append(drop.rstrip("\n"))
+    if trace.get("l2"):
+        lines.append(str(trace["l2"]))
     return "\n".join(lines).rstrip() + "\n"
+
+
+def explain_disposition(trace: dict[str, Any], drop: str | None, dst: str) -> str:
+    """One sentence under the disposition. It names the interface or ACL line."""
+    disposition = str(trace.get("disposition") or "NONE").upper()
+    steps = trace.get("steps") or []
+    denied = disposition in {"DENIED_IN", "DENIED_OUT", "DENIED"} or any(
+        str(step.get("action") or "").upper() == "DENIED" for step in steps
+    )
+    if denied:
+        return _deny_sentence(steps, drop, disposition)
+    if disposition == "ACCEPTED":
+        node, iface = _located(steps, "ACCEPTED", "interface")
+        if node and iface:
+            return f"Delivered to {node} on {_short_interface(iface)}."
+        return "Delivered to the destination."
+    if disposition == "DELIVERED_TO_SUBNET":
+        node, iface = _located(steps, "DELIVERED_TO_SUBNET", "outputInterface", "interface")
+        where = _where(node, iface)
+        return f"Delivered onto the subnet out {where}."
+    if disposition == "EXITS_NETWORK":
+        node, iface = _located(steps, "EXITS_NETWORK", "outputInterface", "interface")
+        return f"The trace leaves the lab on {_where(node, iface)}."
+    if disposition == "NO_ROUTE":
+        node, _iface = _located(steps, "NO_ROUTE", "outputInterface", "interface")
+        return f"No route for {dst} on {node or 'the device'}."
+    if disposition == "NULL_ROUTED":
+        node, _iface = _located(steps, "NULL_ROUTED", "outputInterface", "interface")
+        return f"Discarded by a null route for {dst} on {node or 'the device'}."
+    if disposition == "NEIGHBOR_UNREACHABLE":
+        step = _action_step(steps, "NEIGHBOR_UNREACHABLE")
+        detail = (step or {}).get("detail") or {}
+        node = str((step or {}).get("node") or "the device")
+        iface = str(detail.get("outputInterface") or detail.get("interface") or "")
+        neighbor = detail.get("resolvedNexthopIp") or detail.get("arpIp") or "the next hop"
+        return f"No neighbor answered for {neighbor} on {_where(node, iface)}."
+    if disposition == "NO_ACTIVE_LOCATION":
+        return "No active location. The interface where this trace starts is shut or not up."
+    if disposition == "INSUFFICIENT_INFO":
+        return "The engine did not have enough information to finish this trace."
+    if disposition == "LOOP":
+        return "The trace looped and was stopped."
+    error = trace.get("error")
+    if error:
+        return f"No trace was computed. {error}"
+    return "No trace was computed."
+
+
+def _deny_sentence(steps: list[dict[str, Any]], drop: str | None, disposition: str) -> str:
+    node = "the device"
+    iface = ""
+    acl = ""
+    for step in steps:
+        if str(step.get("action") or "").upper() != "DENIED":
+            continue
+        node = str(step.get("node") or node)
+        detail = step.get("detail") or {}
+        acl = str(detail.get("filter") or acl)
+        prefer = "outputInterface" if disposition == "DENIED_OUT" else "inputInterface"
+        iface = str(detail.get(prefer) or detail.get("inputInterface") or detail.get("outputInterface") or iface)
+    line_no = ""
+    ace = ""
+    if drop:
+        named = re.search(r"ACL\s+(\S+)", drop)
+        if named:
+            acl = named.group(1)
+        lined = re.search(r"line\s+(\d+):\s*(.+)", drop)
+        if lined:
+            line_no = lined.group(1)
+            ace = lined.group(2).strip()
+    src, dest = _ace_endpoints(ace) if ace else (None, None)
+    where = _where(node, iface)
+    label = f"ACL {acl}" if acl else "a filter"
+    if line_no:
+        label = f"{label} line {line_no}"
+    if src and dest:
+        return f"Dropped because {label} on {where} denies {src} to {dest}."
+    return f"Dropped because {label} on {where} denies this flow."
+
+
+def _ace_endpoints(ace: str) -> tuple[str | None, str | None]:
+    parts = ace.split()
+    if len(parts) < 4:
+        return None, None
+    rest = parts[2:]
+    src, rest = _take_endpoint(rest)
+    dest, _rest = _take_endpoint(rest)
+    return src, dest
+
+
+def _take_endpoint(tokens: list[str]) -> tuple[str | None, list[str]]:
+    if not tokens:
+        return None, tokens
+    if tokens[0].lower() == "any":
+        return "any", tokens[1:]
+    if tokens[0].lower() == "host" and len(tokens) > 1:
+        return tokens[1], tokens[2:]
+    if len(tokens) > 1 and _IP.fullmatch(tokens[0]) and _IP.fullmatch(tokens[1]):
+        return _wildcard_prefix(tokens[0], tokens[1]), tokens[2:]
+    if _IP.fullmatch(tokens[0]):
+        return tokens[0], tokens[1:]
+    return tokens[0], tokens[1:]
+
+
+def _wildcard_prefix(address: str, wildcard: str) -> str:
+    try:
+        inverted = int(ipaddress.ip_address(wildcard)) ^ 0xFFFFFFFF
+        mask = ipaddress.ip_address(inverted)
+        network = ipaddress.ip_network(f"{address}/{mask}", strict=False)
+    except ValueError:
+        return f"{address} {wildcard}"
+    return str(network)
+
+
+def _action_step(steps: list[dict[str, Any]], action: str) -> dict[str, Any] | None:
+    for step in steps:
+        if str(step.get("action") or "").upper() == action:
+            return step
+    return steps[-1] if steps else None
+
+
+def _located(steps: list[dict[str, Any]], action: str, *keys: str) -> tuple[str, str]:
+    step = _action_step(steps, action)
+    if step is None:
+        return "", ""
+    detail = step.get("detail") or {}
+    iface = ""
+    for key in keys:
+        if detail.get(key):
+            iface = str(detail[key])
+            break
+    return str(step.get("node") or ""), iface
+
+
+def _where(node: str, iface: str) -> str:
+    if node and iface:
+        return f"{node} {_short_interface(iface)}"
+    return node or iface or "the device"
 
 
 def format_change_diff(

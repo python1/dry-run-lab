@@ -2,6 +2,7 @@
 
 import os
 import socket
+import uuid
 
 os.environ.setdefault("DRYRUN_HOME", "/tmp/dryrun-engine-test")
 
@@ -26,19 +27,33 @@ def _engine_up() -> bool:
 pytestmark = pytest.mark.skipif(not _engine_up(), reason="analysis engine is not listening")
 
 
+def _engine() -> Engine:
+    return Engine(network=f"dryrun-test-{uuid.uuid4().hex[:10]}")
+
+
 def test_show_recomputes_a_cold_cache() -> None:
     lab = load_office_lab()
-    engine = Engine()
-    assert engine._ready is False
-    route = engine.show(lab, "R1", "show ip route")
-    assert engine._ready is True
-    assert "[computed]" in route
-    assert "10.255.1.1/32" in route
+    engine = _engine()
+    try:
+        assert engine._ready is False
+        route = engine.show(lab, "R1", "show ip route")
+        assert engine._ready is True
+        assert "[computed]" in route
+        assert "10.255.1.1/32" in route
+    finally:
+        engine.close()
 
 
 def test_office_lab_routes_interfaces_and_unparsed_lines() -> None:
     lab = load_office_lab()
-    engine = Engine()
+    engine = _engine()
+    try:
+        _office_assertions(engine, lab)
+    finally:
+        engine.close()
+
+
+def _office_assertions(engine: Engine, lab) -> None:
     engine.recompute(lab)
     assert lab.engine_error is None, lab.engine_error
     route = engine.show(lab, "R1", "show ip route")

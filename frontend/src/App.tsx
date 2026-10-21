@@ -107,7 +107,8 @@ export default function App() {
 
   const suggestions = lab?.links.filter((link) => link.status === "suggested") ?? [];
   const unsimulated = device?.unsimulated ?? [];
-  const missed = unsimulated.filter((row) => row.kind !== "ignored");
+  const limits = unsimulated.filter((row) => row.kind === "limit");
+  const missed = unsimulated.filter((row) => row.kind !== "ignored" && row.kind !== "limit");
   const ignored = unsimulated.filter((row) => row.kind === "ignored");
 
   return (
@@ -168,7 +169,7 @@ export default function App() {
               Load office lab
             </Button>
           </div>
-          <div className="flex gap-2 px-3 pb-2">
+          <div className="flex flex-wrap gap-2 px-3 pb-2">
             <Button
               size="sm"
               variant="secondary"
@@ -191,6 +192,17 @@ export default function App() {
             >
               <Plus className="h-3.5 w-3.5" /> Switch
             </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                setAddRole("host");
+                setAddName("");
+                setAddOpen(true);
+              }}
+            >
+              <Plus className="h-3.5 w-3.5" /> Host
+            </Button>
           </div>
           <div className="min-h-0 flex-1 overflow-auto px-2">
             {lab?.devices.map((item) => (
@@ -205,13 +217,13 @@ export default function App() {
                 }`}
               >
                 <span className="flex items-center gap-2">
-                  <Router className={`h-4 w-4 ${item.role === "router" ? "text-amber" : "text-steel"}`} />
+                  <Router className={`h-4 w-4 ${item.role === "router" ? "text-amber" : item.role === "host" ? "text-moss" : "text-steel"}`} />
                   <span>{item.name}</span>
-                  <Badge tone={item.role === "router" ? "amber" : "steel"}>{item.role}</Badge>
+                  <Badge tone={item.role === "router" ? "amber" : item.role === "host" ? "moss" : "steel"}>{item.role}</Badge>
                 </span>
-                {item.unsimulated.some((row) => row.kind !== "ignored") && (
+                {item.unsimulated.some((row) => row.kind !== "ignored" && row.kind !== "limit") && (
                   <Badge tone="coral">
-                    {item.unsimulated.filter((row) => row.kind !== "ignored").length}
+                    {item.unsimulated.filter((row) => row.kind !== "ignored" && row.kind !== "limit").length}
                   </Badge>
                 )}
                 {item.unsimulated.some((row) => row.kind === "ignored") && (
@@ -319,7 +331,20 @@ export default function App() {
               >
                 Save and recompute
               </Button>
-              {missed.length === 0 && ignored.length === 0 ? (
+              {limits.length > 0 && (
+                <div className="rounded-md border border-steel/50 bg-steel/10 p-3">
+                  <h3 className="text-sm font-semibold text-steel">Not modeled</h3>
+                  <ul className="mt-2 space-y-2">
+                    {limits.map((row, index) => (
+                      <li key={`${row.text}-${index}`} className="text-xs">
+                        <div className="font-mono text-steel">{row.text}</div>
+                        <div className="text-paper/80">{row.detail}</div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {missed.length === 0 && ignored.length === 0 && limits.length === 0 ? (
                 <div className="rounded-md border border-line p-3">
                   <h3 className="text-sm font-semibold text-paper">Lines the engine did not model</h3>
                   <p className="mt-2 text-xs text-muted">No unparsed lines reported for this device.</p>
@@ -407,7 +432,7 @@ export default function App() {
               </select>
             </label>
           </div>
-          <div className="min-h-0 flex-1 px-2 pb-2">
+          <div className="min-h-0 flex-1 px-2 pb-3">
             <DeviceCli device={selected} onLab={setLab} />
           </div>
         </section>
@@ -417,7 +442,7 @@ export default function App() {
         <span>Not a live network</span>
       </footer>
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent title={addRole === "router" ? "Add a router" : "Add a switch"}>
+        <DialogContent title={addRole === "router" ? "Add a router" : addRole === "host" ? "Add a host" : "Add a switch"}>
           <form
             className="space-y-3"
             onSubmit={(event) => {

@@ -33,6 +33,7 @@ class Link:
     status: str
     source: str
     reason: str
+    down: bool = False
 
 
 @dataclass
@@ -93,6 +94,7 @@ def lab_to_dict(lab: Lab) -> dict:
                 "status": link.status,
                 "source": link.source,
                 "reason": link.reason,
+                "down": link.down,
             }
             for link in lab.links
         ],
@@ -128,6 +130,7 @@ def lab_from_dict(data: dict) -> Lab:
                 status=str(raw.get("status") or "suggested"),
                 source=str(raw.get("source") or "user"),
                 reason=str(raw.get("reason") or ""),
+                down=bool(raw.get("down") or False),
             )
         )
     lab.dismissed = [str(item) for item in data.get("dismissed") or []]

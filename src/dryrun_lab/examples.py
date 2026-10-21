@@ -27,7 +27,7 @@ def load_lab_dir(path: Path) -> Lab:
         parsed = parse_config(config)
         name = parsed.hostname or config_path.stem
         role = raw.get("role") or "router"
-        if role not in {"router", "switch"}:
+        if role not in {"router", "switch", "host"}:
             role = "router"
         lab.devices.append(
             Device(

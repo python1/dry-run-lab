@@ -64,6 +64,8 @@ bin/dryrun-lab show R1 revert
 
 Supported device-CLI commands: `show running-config`, `show ip interface brief`, `show ip route`, `show vlan brief`, `show interfaces trunk`, `show access-lists`, `show warnings`, `ping`, `traceroute`, `configure terminal`, and `revert`. Pipes are refused. Interface lists use natural port order, so Gi1/0/2 comes before Gi1/0/10.
 
+A host is an end device: one interface address and `ip default-gateway`. Confirming a cable on the canvas writes that cable into the layer-1 topology. Suggested cables are not. Ping and traceroute print one sentence under the disposition. When the trace starts on a host, a following line lists the layer-2 path across confirmed links and computed VLAN membership. Switches on that line are not hops in the computed trace. A shut or down cable is drawn red and dashed after the next recompute. A host with no address, no gateway, or no confirmed link is labeled **Not modeled**.
+
 ## Office lab
 
 `examples/office-lab/` is synthetic. Addresses are from `10.0.0.0/8` or the documentation ranges `192.0.2.0/24` and `203.0.113.0/24`.
