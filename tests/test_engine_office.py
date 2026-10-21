@@ -34,7 +34,10 @@ def test_office_lab_routes_interfaces_and_unparsed_lines() -> None:
     route = engine.show(lab, "R1", "show ip route")
     brief = engine.show(lab, "R1", "show ip interface brief")
     running = engine.show(lab, "R1", "show running-config")
-    assert "COMPUTED / SIMULATED" in route
+    assert "[computed]" in route
+    assert "[computed]" in brief
+    assert "not proof that a live network" not in route
+    assert "not proof that a live network" not in brief
     assert "10.255.1.1/32" in route
     assert "203.0.113.0/24" in route
     assert "0.0.0.0/0" in route

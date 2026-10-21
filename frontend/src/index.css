@@ -18,13 +18,60 @@ html,
 body,
 #root {
   height: 100%;
+  width: 100%;
 }
 
 body {
   margin: 0;
+  overflow: hidden;
   background: var(--color-ink);
   color: var(--color-paper);
   font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+.lab-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+@media (min-width: 1024px) {
+  .lab-grid {
+    grid-template-columns: 280px minmax(0, 1fr) 360px;
+    grid-template-rows: minmax(160px, 1fr) 14px var(--terminal-h, 300px);
+  }
+}
+
+.split-handle {
+  background: #14160f;
+}
+
+.split-handle:hover,
+.split-handle:focus-visible {
+  background: color-mix(in srgb, var(--color-amber) 35%, #14160f);
+}
+
+.device-cli-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-color: #8eb6c9 #171b13;
+}
+
+.device-cli-scroll::-webkit-scrollbar {
+  height: 14px;
+}
+
+.device-cli-scroll::-webkit-scrollbar-thumb {
+  background: #8eb6c9;
+  border-radius: 7px;
+}
+
+.device-cli-scroll::-webkit-scrollbar-track {
+  background: #171b13;
+}
+
+.device-cli-scroll .xterm {
+  height: 100%;
 }
 
 * {

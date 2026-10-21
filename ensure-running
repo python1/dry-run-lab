@@ -180,3 +180,6 @@ start_server
 say "Dry Run Lab"
 say "http://127.0.0.1:8742"
 say "CLI: $DATA/venv/bin/dryrun-lab"
+if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" && "${DRYRUN_OPEN:-1}" != "0" ]]; then
+  "$ROOT/bin/open-lab" "http://127.0.0.1:8742" || true
+fi

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from dryrun_lab.configparse import canonical_interface
-from dryrun_lab.constants import ENGINE_HOST, ENGINE_PORT, SIMULATED_BANNER
+from dryrun_lab.constants import COMPUTED_TAG, ENGINE_HOST, ENGINE_PORT
 from dryrun_lab.paths import data_home
 from dryrun_lab.showfmt import (
     command_help,
@@ -142,7 +142,7 @@ class Engine:
 
 
 def _wrap(device: str, command: str, body: str) -> str:
-    return f"{device}# {command.strip()}\n{SIMULATED_BANNER}\n\n{body}"
+    return f"{device}# {command.strip()}\n{COMPUTED_TAG}\n\n{body}"
 
 
 def _safe_name(name: str) -> str:

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Open the lab in a maximized browser window. Missing display or browser is not fatal.
+set -euo pipefail
+
+URL="${1:-http://127.0.0.1:8742}"
+
+if [[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+  printf '%s\n' "$URL"
+  exit 0
+fi
+
+launch() {
+  nohup "$@" >/dev/null 2>&1 &
+}
+
+browser=""
+for candidate in google-chrome google-chrome-stable chromium chromium-browser microsoft-edge; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    browser="$candidate"
+    break
+  fi
+done
+
+if [[ -n "$browser" ]]; then
+  launch "$browser" --start-maximized --new-window "$URL"
+  exit 0
+fi
+
+if command -v firefox >/dev/null 2>&1; then
+  launch firefox --new-window "$URL"
+  if command -v wmctrl >/dev/null 2>&1; then
+    sleep 0.6
+    wmctrl -a "Dry Run Lab" -b add,maximized_vert,maximized_horz >/dev/null 2>&1 || true
+  fi
+  exit 0
+fi
+
+if command -v xdg-open >/dev/null 2>&1; then
+  launch xdg-open "$URL"
+  exit 0
+fi
+
+printf '%s\n' "$URL"
+exit 0

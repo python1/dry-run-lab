@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Cable, Plus, Router, Trash2 } from "lucide-react";
 import { api } from "./api";
 import { DeviceCli } from "./components/DeviceCli";
@@ -13,6 +13,17 @@ import type { Lab, Role } from "./types";
 const DISCLAIMER =
   "Computed results are a simulation from these configs. They are not proof that a live network will behave the same way. Not affiliated with or endorsed by Cisco.";
 const CREDIT = "Created by Paul Charydczak";
+const SPLIT_KEY = "dryrun-terminal-height";
+
+function readSplit() {
+  try {
+    const raw = sessionStorage.getItem(SPLIT_KEY);
+    const value = raw ? Number(raw) : 300;
+    return Number.isFinite(value) && value >= 120 ? value : 300;
+  } catch {
+    return 300;
+  }
+}
 
 type Tab = "canvas" | "devices" | "config" | "cli";
 
@@ -28,6 +39,17 @@ export default function App() {
   const [addOpen, setAddOpen] = useState(false);
   const [addRole, setAddRole] = useState<Role>("router");
   const [addName, setAddName] = useState("");
+  const [fitNonce, setFitNonce] = useState(0);
+  const [terminalHeight, setTerminalHeight] = useState(readSplit);
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(SPLIT_KEY, String(Math.round(terminalHeight)));
+    } catch {
+      /* session storage can be blocked */
+    }
+  }, [terminalHeight]);
 
   async function run(action: () => Promise<Lab>) {
     setBusy(true);
@@ -87,7 +109,7 @@ export default function App() {
   const unsimulated = device?.unsimulated ?? [];
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-dvh w-screen flex-col overflow-hidden">
       <header className="flex items-center justify-between gap-4 border-b border-line px-4 py-3">
         <div className="flex items-center gap-3">
           <Mark />
@@ -121,11 +143,26 @@ export default function App() {
           </button>
         ))}
       </nav>
-      <div className="grid min-h-0 flex-1 lg:grid-cols-[280px_minmax(0,1fr)_360px] lg:grid-rows-[minmax(220px,1fr)_minmax(340px,46vh)]">
+      <div
+        ref={gridRef}
+        className="lab-grid min-h-0 flex-1"
+        style={{ ["--terminal-h" as string]: `${terminalHeight}px` }}
+      >
         <aside className={`${tab === "devices" ? "flex" : "hidden"} min-h-0 flex-col border-line lg:col-start-1 lg:row-start-1 lg:flex lg:border-r`}>
           <div className="flex items-center justify-between px-3 py-2">
             <h2 className="text-xs uppercase tracking-wider text-muted">Devices</h2>
-            <Button size="sm" variant="secondary" onClick={() => void run(() => api.loadExample())} disabled={busy}>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() =>
+                void run(async () => {
+                  const next = await api.loadExample();
+                  setFitNonce((value) => value + 1);
+                  return next;
+                })
+              }
+              disabled={busy}
+            >
               Load office lab
             </Button>
           </div>
@@ -210,12 +247,13 @@ export default function App() {
             </div>
           </div>
         </aside>
-        <section className={`${tab === "canvas" ? "block" : "hidden"} min-h-0 lg:col-start-2 lg:row-start-1 lg:block`}>
+        <section className={`${tab === "canvas" ? "block" : "hidden"} h-full min-h-0 overflow-hidden lg:col-start-2 lg:row-start-1 lg:block`}>
           {lab ? (
             <Topology
               lab={lab}
               selected={selected}
               pending={pending}
+              fitNonce={fitNonce}
               onSelect={(name) => {
                 setSelected(name);
               }}
@@ -295,7 +333,33 @@ export default function App() {
             <p className="px-3 text-sm text-muted">Select a device to paste its config.</p>
           )}
         </aside>
-        <section className={`${tab === "cli" ? "flex" : "hidden"} min-h-0 flex-col border-t border-line bg-[#10140c] lg:col-span-3 lg:col-start-1 lg:row-start-2 lg:flex`}>
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize canvas and terminal"
+          aria-valuenow={Math.round(terminalHeight)}
+          className="split-handle hidden cursor-row-resize items-center justify-center lg:col-span-3 lg:col-start-1 lg:row-start-2 lg:flex"
+          onPointerDown={(event) => {
+            event.preventDefault();
+            const grid = gridRef.current;
+            if (!grid) return;
+            const move = (ev: PointerEvent) => {
+              const rect = grid.getBoundingClientRect();
+              const next = rect.bottom - ev.clientY - 14;
+              const clamped = Math.min(Math.max(next, 140), Math.max(180, rect.height - 180));
+              setTerminalHeight(clamped);
+            };
+            const up = () => {
+              window.removeEventListener("pointermove", move);
+              window.removeEventListener("pointerup", up);
+            };
+            window.addEventListener("pointermove", move);
+            window.addEventListener("pointerup", up);
+          }}
+        >
+          <span className="h-1.5 w-24 rounded-full bg-muted/80" />
+        </div>
+        <section className={`${tab === "cli" ? "flex" : "hidden"} min-h-0 flex-col border-t border-line bg-[#10140c] lg:col-span-3 lg:col-start-1 lg:row-start-3 lg:flex`}>
           <div className="flex items-center justify-between px-3 py-1.5">
             <h2 className="text-xs uppercase tracking-wider text-muted">Device CLI · computed</h2>
             <label className="flex items-center gap-2 text-xs text-muted">

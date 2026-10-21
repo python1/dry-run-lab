@@ -20,7 +20,7 @@ The script is idempotent. It installs a JDK 21 if `java` is missing or older, do
 http://127.0.0.1:8742
 ```
 
-Open that URL on the same machine. The server listens on `127.0.0.1` only.
+Open that URL on the same machine. The server listens on `127.0.0.1` only. The page fills the browser window. On a desktop, `bin/open-lab` opens it maximized, and `./ensure-running` does that when a display is available.
 
 Run it again any time. If the engine and the lab are already healthy, it leaves them running and prints the same URL.
 
@@ -40,7 +40,7 @@ bin/dryrun-lab show R1 "show ip interface brief"
 bin/dryrun-lab show R1 "show running-config"
 ```
 
-The CLI only talks to `127.0.0.1` or `localhost`. It reads config files locally and posts the text to the lab. Every show transcript is labeled `COMPUTED / SIMULATED`.
+The CLI only talks to `127.0.0.1` or `localhost`. It reads config files locally and posts the text to the lab. Each show transcript is tagged `[computed]`. The full limit stays in the lab banner.
 
 Supported device-CLI commands in this stage: `show running-config`, `show ip interface brief`, `show ip route`, and `show warnings`. Pipes are refused.
 

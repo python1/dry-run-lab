@@ -8,12 +8,7 @@ DISCLAIMER = (
     "Not affiliated with or endorsed by Cisco."
 )
 
-SIMULATED_BANNER = (
-    "COMPUTED / SIMULATED\n"
-    "This output was calculated from the loaded configs. "
-    "It is not a reading from a live device, and it is not proof that a "
-    "live network will behave the same way."
-)
+COMPUTED_TAG = "[computed]"
 
 WEB_HOST = "127.0.0.1"
 WEB_PORT = 8742

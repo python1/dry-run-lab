@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from dryrun_lab.constants import CREDIT, DISCLAIMER, WEB_HOST, WEB_PORT
+from dryrun_lab.constants import CREDIT, WEB_HOST, WEB_PORT
 from dryrun_lab.examples import load_lab_dir
 
 FOOTER = (
@@ -165,7 +165,6 @@ def main(argv: list[str] | None = None) -> int:
 
 def _footer() -> None:
     print(f"\n{FOOTER}")
-    print(DISCLAIMER)
     print(CREDIT)
 
 
