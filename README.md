@@ -59,7 +59,7 @@ bin/dryrun-lab link list
 
 The CLI only talks to `127.0.0.1` or `localhost`. It reads config files locally and posts the text to the lab. Each show, ping, and traceroute transcript is tagged `[computed]`. `bin/dryrun-lab --help` and `bin/dryrun-lab load` print the full limit. Other commands do not repeat it. The same limit stays in the lab banner.
 
-`bin/dryrun-lab --version` prints the build commit, for example `dryrun-lab e26bcd6`. The same stamp is the first line of each `ensure-running` log and sits next to the credit in the page footer. A checkout uses `git rev-parse`, and adds `-dirty` when the work tree has changes. A packaged tree with no `.git` uses the commit written into the package. If neither is available, the stamp is `unknown`.
+`bin/dryrun-lab --version` prints the build commit, for example `dryrun-lab <commit>`. The same stamp is the first line of each `ensure-running` log and sits next to the credit in the page footer. A checkout uses `git rev-parse`, and adds `-dirty` when the work tree has changes. A packaged tree with no `.git` uses the commit written into the package. If neither is available, the stamp is `unknown`.
 
 `configure terminal` edits that device's config. `end` recomputes and prints what changed in routes, warnings, and reachability. `abort` discards the lines. `revert` undoes one edit on that device and recomputes. Call it again to undo the edit before that. The transcript says `Reverted one edit. Recomputed.` The same commands work in the page's device CLI.
 

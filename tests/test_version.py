@@ -11,6 +11,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_checkout_stamp_matches_git() -> None:
+    probe = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        text=True,
+    )
+    if probe.returncode != 0 or probe.stdout.strip() != "true":
+        pytest.skip("no git checkout")
     sha = subprocess.check_output(
         ["git", "-C", str(ROOT), "rev-parse", "--short=7", "HEAD"],
         text=True,

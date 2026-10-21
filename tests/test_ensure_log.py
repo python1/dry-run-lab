@@ -48,6 +48,23 @@ def test_fresh_install_certificate_lines_collapse_to_one_summary(tmp_path: Path)
     assert "No services need to be restarted" not in text
 
 
+def test_apt_log_strips_carriage_returns(tmp_path: Path) -> None:
+    apt = "\r\n".join(
+        [
+            "Preparing to unpack openjdk-21-jre-headless.",
+            "Get:1 http://example.invalid/debian foo amd64 1",
+            "Setting up ca-certificates.",
+        ]
+    )
+    text = _summarize(tmp_path, apt + "\r\n")
+    assert "\r" not in text
+    assert text == (
+        "Preparing to unpack openjdk-21-jre-headless.\n"
+        "Get:1 http://example.invalid/debian foo amd64 1\n"
+        "Setting up ca-certificates.\n"
+    )
+
+
 def test_added_and_replaced_certificates_share_one_summary_line(tmp_path: Path) -> None:
     apt = "\n".join(
         [

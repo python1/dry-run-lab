@@ -89,6 +89,7 @@ summarize_apt() {
   added="$(grep -c 'Adding debian:' "$file" || true)"
   replaced="$(grep -c 'Replacing debian:' "$file" || true)"
   awk '
+    { gsub(/\r/, "") }
     $0 ~ /^(Adding|Replacing) debian:/ { next }
     $0 ~ /Reading database/ { next }
     $0 ~ /needrestart/ { next }
