@@ -2,7 +2,7 @@
 
 Synthetic configs only. Addresses are private (`10.0.0.0/8`) or documentation ranges (`192.0.2.0/24`, `203.0.113.0/24`). Nothing here is from a real network.
 
-The text is vendor-style (IOS-style) so the analyzer can read it. Not affiliated with or endorsed by Cisco.
+These files are router and switch running-configs in the syntax the analyzer reads. Not affiliated with or endorsed by Cisco.
 
 ## Picture
 
