@@ -79,6 +79,39 @@ java_major() {
   java -version 2>&1 | sed -n 's/.* version "\([0-9][0-9]*\).*/\1/p' | head -1
 }
 
+summarize_apt() {
+  local file="$1"
+  local certs
+  certs="$(grep -c 'Replacing debian:' "$file" || true)"
+  if [[ "${certs}" -gt 0 ]]; then
+    log "apt replaced ${certs} certificate files"
+  fi
+  grep -vE 'Replacing debian:|needrestart|Pending kernel upgrade|Restarting services|No containers need to be restarted|No user sessions are running outdated binaries|No VM guests are running outdated hypervisor|Service restarts being deferred' "$file" >>"$LOG" || true
+}
+
+apt_logged() {
+  local tmp status
+  tmp="$(mktemp)"
+  set +e
+  "$@" >"$tmp" 2>&1
+  status=$?
+  set -e
+  summarize_apt "$tmp"
+  rm -f "$tmp"
+  return "$status"
+}
+
+reap_pid() {
+  local file="$1"
+  local pid
+  [[ -f "$file" ]] || return 0
+  pid="$(tr -cd '0-9' <"$file" || true)"
+  if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+    log "removing stale pid file $file"
+    rm -f "$file"
+  fi
+}
+
 install_packages() {
   local need=()
   command -v curl >/dev/null 2>&1 || need+=(curl)
@@ -97,8 +130,8 @@ install_packages() {
     return 0
   fi
   log "apt install ${need[*]}"
-  as_root apt-get update -qq >>"$LOG" 2>&1
-  as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${need[@]}" ca-certificates >>"$LOG" 2>&1
+  apt_logged as_root apt-get update -qq
+  apt_logged as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${need[@]}" ca-certificates
 }
 
 write_runner() {
@@ -119,6 +152,7 @@ EOF
 }
 
 start_java() {
+  reap_pid "$DATA/batfish.pid"
   if port_open 9996; then
     log "engine already listening on 127.0.0.1:9996"
     return 0
@@ -136,10 +170,11 @@ start_java() {
 }
 
 start_docker() {
-  log "falling back to the official batfish/allinone image"
+  local image="batfish/allinone:v2026.08.27"
+  log "falling back to the official ${image} image"
   if ! command -v docker >/dev/null 2>&1; then
-    as_root apt-get update -qq >>"$LOG" 2>&1
-    as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io >>"$LOG" 2>&1
+    apt_logged as_root apt-get update -qq
+    apt_logged as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io
   fi
   if ! as_root docker info >>"$LOG" 2>&1; then
     nohup as_root dockerd --host=unix:///var/run/docker.sock --iptables=false >>"$DATA/dockerd.log" 2>&1 &
@@ -151,7 +186,7 @@ start_docker() {
   fi
   as_root docker rm -f dryrun-batfish >>"$LOG" 2>&1 || true
   as_root docker run -d --name dryrun-batfish --network host --memory 3g \
-    --entrypoint java batfish/allinone:latest \
+    --entrypoint java "$image" \
     -Xms256m -Xmx2g \
     -Dlog4j.configurationFile=log4j2.yaml \
     -cp allinone-bundle.jar \
@@ -236,6 +271,7 @@ lab_healthy() {
 }
 
 start_server() {
+  reap_pid "$DATA/server.pid"
   if lab_healthy; then
     log "lab already healthy"
     return 0

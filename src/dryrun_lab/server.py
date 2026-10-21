@@ -22,6 +22,7 @@ from dryrun_lab.store import (
     apply_inference,
     confirm_link,
     dismiss_link,
+    place_host,
     public_lab,
     push_config,
 )
@@ -64,8 +65,8 @@ class DeviceIn(BaseModel):
     role: str = "router"
     config: str = ""
     neighborText: str = ""
-    x: float = 120
-    y: float = 120
+    x: float | None = None
+    y: float | None = None
 
 
 class DeviceUpdate(BaseModel):
@@ -182,14 +183,15 @@ def add_device(body: DeviceIn) -> dict:
         if _store.lab.device(body.name):
             raise HTTPException(409, "A device with that name already exists")
         config = body.config or _blank_config(body.name, body.role)
+        x, y = _placed(body, _store.lab)
         _store.lab.devices.append(
             Device(
                 name=body.name,
                 role=body.role,
                 config=config,
                 neighbor_text=body.neighborText,
-                x=body.x,
-                y=body.y,
+                x=x,
+                y=y,
             )
         )
         if _store.lab.name == "untitled":
@@ -253,6 +255,16 @@ def create_link(body: LinkIn) -> dict:
         return _payload()
 
 
+@app.delete("/api/links/{link_id}")
+def delete_link(link_id: str) -> dict:
+    with _store.lock:
+        if not dismiss_link(_store.lab, link_id):
+            raise HTTPException(404, "No such link")
+        _engine.recompute(_store.lab)
+        _store.save()
+        return _payload()
+
+
 @app.post("/api/links/{link_id}/confirm")
 def confirm(link_id: str) -> dict:
     with _store.lock:
@@ -303,6 +315,16 @@ def show(body: ShowIn) -> JSONResponse:
 
 
 _ROLES = {"router", "switch", "host"}
+
+
+def _placed(body: DeviceIn, lab) -> tuple[float, float]:
+    if body.x is not None and body.y is not None:
+        return body.x, body.y
+    if body.role == "host":
+        x, y = place_host(lab)
+    else:
+        x, y = 120.0, 120.0
+    return body.x if body.x is not None else x, body.y if body.y is not None else y
 
 
 def _blank_config(name: str, role: str) -> str:

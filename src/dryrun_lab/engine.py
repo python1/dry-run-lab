@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from dryrun_lab.acls import added_aces, numbered_config, sequence_of, shadow_sentence, split_sequence
 from dryrun_lab.configedit import apply_config_lines, prompt_for
 from dryrun_lab.configparse import canonical_interface, parse_config
 from dryrun_lab.constants import COMPUTED_TAG, ENGINE_HOST, ENGINE_PORT
@@ -85,13 +86,18 @@ class Engine:
         """Delete a test network. The live lab network is left in place."""
         if not self.network.startswith("dryrun-test-"):
             return
+        active: set[str] = set()
         try:
             with self._lock:
                 session = self._client()
-                session.delete_network(self.network)
+                for name in list(session.list_networks()):
+                    if str(name).startswith("dryrun-test-"):
+                        session.delete_network(str(name))
+                active = {str(name) for name in session.list_networks()}
         except Exception:
             log.exception("could not delete test network %s", self.network)
         finally:
+            _sweep_test_directories(active)
             self._session = None
             self._ready = False
 
@@ -253,7 +259,14 @@ class Engine:
         if not history:
             return _wrap(device.name, command, "Nothing to revert on this device.\n")
         previous = history.pop()
-        body = self._replace_config(lab, device, previous, applied=1, remember=False)
+        body = self._replace_config(
+            lab,
+            device,
+            previous,
+            applied=1,
+            remember=False,
+            headline="Reverted one edit. Recomputed.",
+        )
         if body.startswith("Change was not kept"):
             history.append(previous)
         return _wrap(device.name, command, body)
@@ -272,6 +285,7 @@ class Engine:
         applied: int,
         remember: bool,
         edit_lines: list[str] | None = None,
+        headline: str | None = None,
     ) -> str:
         from dryrun_lab.store import apply_inference
 
@@ -300,6 +314,7 @@ class Engine:
             after_reach.setdefault(label, summary)
         missing = {label: "not present" for label in after_reach if label not in before_reach}
         before_reach.update(missing)
+        notices = self._acl_notices(device.name, before_config, updated)
         return format_change_diff(
             before_routes,
             _snap_routes(self._routes),
@@ -308,6 +323,8 @@ class Engine:
             before_reach,
             after_reach,
             applied,
+            headline=headline,
+            notices=notices,
         )
 
     def _flow_body(self, lab: Lab, device_name: str, flow: dict[str, str | None]) -> tuple[dict[str, Any], str | None]:
@@ -371,6 +388,32 @@ class Engine:
                 )
         return {"ok": True, "disposition": trace.get("disposition") or "", "steps": steps, "error": None}
 
+    def _acl_notices(self, device_name: str, before: str, after: str) -> list[str]:
+        added = added_aces(before, after)
+        if not added:
+            return []
+        questioned = True
+        try:
+            with self._lock:
+                frame = self._client().q.filterLineReachability(nodes=device_name.lower()).answer().frame()
+            rows = _records(frame)
+        except Exception:
+            log.exception("filterLineReachability failed")
+            rows = []
+            questioned = False
+        notices: list[str] = []
+        for acl, ace in added:
+            matched = [row for row in rows if _unreachable_matches(row, device_name, acl.name, ace.text)]
+            if questioned and not matched:
+                continue
+            if not questioned and not _covered_by_any(acl, ace):
+                continue
+            blockers: list[str] = []
+            for row in matched:
+                blockers.extend(_text_list(row.get("Blocking_Lines")))
+            notices.append(shadow_sentence(acl, ace, blockers))
+        return notices
+
     def _drop_line(self, lab: Lab, device_name: str, src: str | None, dst: str) -> str | None:
         from pybatfish.datamodel.flow import HeaderConstraints
 
@@ -394,12 +437,15 @@ class Engine:
             return None
         rows.sort(key=lambda row: int(row.get("Line_Index") or 0))
         top = rows[0]
-        acl = top.get("Filter") or "acl"
-        text = str(top.get("Line") or "").strip()
+        acl = str(top.get("Filter") or "acl")
+        reported = str(top.get("Line") or "").strip()
+        sequence, ace = split_sequence(reported)
         device = lab.device(device_name)
-        number = _config_line_number(device.config if device else "", text)
-        where = f"line {number}: " if number else ""
-        return f"Dropped by ACL {acl}\n  {where}{text}\n"
+        if sequence is None and device is not None:
+            sequence = sequence_of(device.config, acl, reported)
+            ace = reported
+        where = f"sequence {sequence}: " if sequence is not None else ""
+        return f"Dropped by ACL {acl}\n  {where}{ace}\n"
 
     def _write_snapshot(self, lab: Lab) -> Path:
         root = data_home() / "snapshots" / _safe_name(self.network)
@@ -422,7 +468,7 @@ class Engine:
                 )
                 wrote_host = True
                 continue
-            (configs / f"{safe}.cfg").write_text(device.config, encoding="utf-8")
+            (configs / f"{safe}.cfg").write_text(numbered_config(device.config), encoding="utf-8")
         if not wrote_host and hosts.exists():
             shutil.rmtree(hosts)
         edges = []
@@ -673,6 +719,9 @@ def _config_depth(commands: list[str]) -> int:
     nested = False
     for raw in commands:
         line = raw.strip().lower()
+        if line.startswith("ip access-list resequence"):
+            nested = False
+            continue
         if line.startswith(("interface ", "ip access-list ", "router ")) or re.fullmatch(r"vlan\s+\d+", line):
             nested = True
         elif line == "exit":
@@ -680,12 +729,88 @@ def _config_depth(commands: list[str]) -> int:
     return 2 if nested else 1
 
 
-def _config_line_number(config: str, text: str) -> int | None:
-    want = " ".join(text.lower().split())
-    for number, raw in enumerate(config.splitlines(), start=1):
-        if " ".join(raw.strip().lower().split()) == want:
-            return number
-    return None
+def _covered_by_any(acl: Any, ace: Any) -> bool:
+    return any(item.seq < ace.seq and item.text.lower() in {"permit ip any any", "permit any"} for item in acl.aces)
+
+
+def _unreachable_matches(row: dict[str, Any], device_name: str, acl_name: str, ace_text: str) -> bool:
+    sources = " ".join(_text_list(row.get("Sources"))).lower()
+    if acl_name.lower() not in sources:
+        return False
+    if device_name.lower() not in sources and ":" in sources:
+        return False
+    _seq, reported = split_sequence(str(row.get("Unreachable_Line") or ""))
+    return reported.lower() == ace_text.lower()
+
+
+def _text_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    try:
+        return [str(item) for item in value]
+    except TypeError:
+        return [str(value)]
+
+
+def _sweep_test_directories(active: set[str] | None = None) -> None:
+    """Remove Batfish leftovers from dryrun-test-* networks. Never touch dryrun."""
+    keep = set(active or ())
+    home = data_home()
+    snap = home / "snapshots"
+    if snap.is_dir():
+        for child in list(snap.iterdir()):
+            if child.name.startswith("dryrun-test-") and child.name not in keep:
+                shutil.rmtree(child, ignore_errors=True)
+    root = home / "batfish" / "data" / "networks"
+    if not root.is_dir():
+        return
+    ids = home / "batfish" / "data" / "ids"
+    for net_dir in list(root.iterdir()):
+        if not net_dir.is_dir():
+            continue
+        prefixes = _snapshot_prefixes(net_dir)
+        if not prefixes or any(not prefix.startswith("dryrun-test-") for prefix in prefixes):
+            continue
+        if prefixes & keep:
+            continue
+        shutil.rmtree(net_dir, ignore_errors=True)
+        if not ids.is_dir():
+            continue
+        for id_root in ids.iterdir():
+            victim = id_root / net_dir.name
+            if victim.exists():
+                shutil.rmtree(victim, ignore_errors=True)
+
+
+def _snapshot_prefixes(net_dir: Path) -> set[str]:
+    found: set[str] = set()
+    zips = list(net_dir.glob("original/*/snapshot.zip"))
+    if not zips:
+        zips = list(net_dir.rglob("snapshot.zip"))[:1]
+    for zip_path in zips:
+        prefix = _zip_root(zip_path)
+        if prefix:
+            found.add(prefix)
+    return found
+
+
+def _zip_root(path: Path) -> str | None:
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(30)
+            if len(header) < 30 or header[:4] != b"PK\x03\x04":
+                return None
+            name_len = int.from_bytes(header[26:28], "little")
+            name = handle.read(name_len)
+    except OSError:
+        return None
+    text = name.decode("utf-8", errors="replace")
+    root = text.split("/", 1)[0]
+    return root or None
 
 
 def _routes(session: Any) -> dict[str, list[dict[str, Any]]]:

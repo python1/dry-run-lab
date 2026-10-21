@@ -9,12 +9,13 @@ from __future__ import annotations
 import ipaddress
 import re
 
+from dryrun_lab.acls import apply_acl_body, apply_resequence_command, is_resequence
 from dryrun_lab.configparse import canonical_interface
 
 _STANZA = re.compile(r"^(interface|vlan|router|ip access-list|line|banner)\b", re.IGNORECASE)
 _ENTER = {"configure terminal", "configure", "conf t", "conf term", "conf terminal"}
 _DENY = re.compile(
-    r"^deny\s+ip\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)\s+"
+    r"^(?:\d+\s+)?deny\s+ip\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)\s+"
     r"(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)\s*$",
     re.IGNORECASE,
 )
@@ -47,6 +48,10 @@ def apply_config_lines(config: str, commands: list[str]) -> str:
         if vlan:
             context = [("vlan", vlan.group(1))]
             _ensure_header(lines, f"vlan {vlan.group(1)}")
+            continue
+        if is_resequence(line):
+            lines = apply_resequence_command(lines, line)
+            context = []
             continue
         if lower.startswith("ip access-list "):
             context = [("acl", line)]
@@ -83,6 +88,9 @@ def prompt_for(device: str, commands: list[str]) -> str:
         if re.fullmatch(r"vlan\s+\d+", lower):
             context = [("vlan", lower.split()[1])]
             continue
+        if is_resequence(line):
+            context = []
+            continue
         if lower.startswith("ip access-list "):
             context = [("acl", line)]
             continue
@@ -111,6 +119,9 @@ def context_depth(commands: list[str]) -> int:
         line = raw.strip().lower()
         if not line:
             continue
+        if line.startswith("ip access-list resequence"):
+            nested = 0
+            continue
         if line.startswith("interface ") or line.startswith("ip access-list ") or line.startswith("router "):
             nested = 1
             continue
@@ -129,6 +140,9 @@ def acl_flows(commands: list[str]) -> list[tuple[str, str, str]]:
     for raw in commands:
         line = raw.strip()
         lower = line.lower()
+        if is_resequence(line):
+            current = None
+            continue
         if lower.startswith("ip access-list "):
             current = line.split()[-1]
             continue
@@ -237,7 +251,7 @@ def _apply_inside(lines: list[str], kind: str, ident: str, line: str) -> None:
     if kind == "interface":
         _apply_interface_body(body, line)
     elif kind == "acl":
-        _apply_acl_body(body, line)
+        body[:] = apply_acl_body(body, line)
     elif kind == "vlan":
         _apply_vlan_body(body, line)
     else:
@@ -305,18 +319,6 @@ def _replace_pair(body: list[str], line: str, left: str, right: str) -> bool:
             return True
     body.append(line.strip())
     return True
-
-
-def _apply_acl_body(body: list[str], line: str) -> None:
-    text = line.strip()
-    if any(existing.strip().lower() == text.lower() for existing in body):
-        return
-    if text.lower().startswith("deny "):
-        for index, existing in enumerate(body):
-            if existing.strip().lower().startswith("permit "):
-                body.insert(index, text)
-                return
-    body.append(text)
 
 
 def _apply_vlan_body(body: list[str], line: str) -> None:

@@ -449,7 +449,13 @@ export default function App() {
               event.preventDefault();
               const name = addName.trim();
               setAddOpen(false);
-              void run(() => api.addDevice({ name, role: addRole, x: 80 + Math.random() * 200, y: 80 }));
+              void run(() =>
+                api.addDevice(
+                  addRole === "host"
+                    ? { name, role: addRole }
+                    : { name, role: addRole, x: 80 + Math.random() * 200, y: 80 },
+                ),
+              );
             }}
           >
             <label className="block text-sm text-muted" htmlFor="device-name">

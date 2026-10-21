@@ -72,6 +72,8 @@ def probes_for_lab(lab: Lab) -> list[Probe]:
                         note=f"routed toward {peer}",
                     )
                 )
+    _add_acl_probes(lab, add)
+    _add_host_probes(lab, add)
     return found
 
 
@@ -98,6 +100,60 @@ def probes_for_acl(lab: Lab, device: str, commands: list[str]) -> list[Probe]:
                 )
             )
     return found
+
+
+def _add_acl_probes(lab: Lab, add) -> None:
+    from dryrun_lab.acls import deny_flows
+    from dryrun_lab.configedit import ingress_interfaces
+
+    for device in lab.devices:
+        if device.role == "host":
+            continue
+        for acl_name, src, dst, _text in deny_flows(device.config):
+            interfaces = ingress_interfaces(device.config, acl_name)
+            if not interfaces:
+                add(Probe(device=device.name, ingress=None, src=src, dst=dst, note=f"acl {acl_name}"))
+                continue
+            for iface in interfaces:
+                add(
+                    Probe(
+                        device=device.name,
+                        ingress=iface,
+                        src=src,
+                        dst=dst,
+                        note=f"acl {acl_name}",
+                    )
+                )
+
+
+def _add_host_probes(lab: Lab, add) -> None:
+    from dryrun_lab.hosts import host_document
+
+    hosts: list[tuple[str, str]] = []
+    for device in lab.devices:
+        if device.role != "host":
+            continue
+        document = host_document(device.name, device.config)
+        if not document:
+            continue
+        for iface in document["hostInterfaces"].values():
+            address = str(iface.get("prefix") or "").split("/", 1)[0]
+            if address:
+                hosts.append((device.name, address))
+                break
+    for source_name, source_ip in hosts:
+        for dest_name, dest_ip in hosts:
+            if source_name == dest_name:
+                continue
+            add(
+                Probe(
+                    device=source_name,
+                    ingress=None,
+                    src=source_ip,
+                    dst=dest_ip,
+                    note=f"host {dest_name}",
+                )
+            )
 
 
 def _subinterfaces(config: str) -> list[dict]:

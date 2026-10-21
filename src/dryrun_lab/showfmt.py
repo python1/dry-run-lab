@@ -207,7 +207,9 @@ def show_interfaces_trunk(rows: list[dict[str, Any]]) -> str:
 
 
 def show_access_lists(config: str, interfaces: list[dict[str, Any]]) -> str:
-    lists = _access_lists(config)
+    from dryrun_lab.acls import parse_acls
+
+    lists = parse_acls(config)
     if not lists:
         return "No access lists are configured on this device.\n"
     applied: dict[str, list[str]] = {}
@@ -221,10 +223,10 @@ def show_access_lists(config: str, interfaces: list[dict[str, Any]]) -> str:
             applied.setdefault(str(outbound), []).append(f"outbound on {name}")
     lines: list[str] = []
     for acl in lists:
-        lines.append(f"{acl['kind']} IP access list {acl['name']}")
-        for entry in acl["lines"]:
-            lines.append(f"  line {entry['line']}: {entry['text']}")
-        for note in applied.get(acl["name"], []):
+        lines.append(f"{acl.kind.capitalize()} IP access list {acl.name}")
+        for ace in acl.aces:
+            lines.append(f"    {ace.seq} {ace.text}")
+        for note in applied.get(acl.name, []):
             lines.append(f"  {note}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
@@ -274,7 +276,7 @@ def format_traceroute(dst: str, src: str | None, ingress: str | None, trace: dic
 
 
 def explain_disposition(trace: dict[str, Any], drop: str | None, dst: str) -> str:
-    """One sentence under the disposition. It names the interface or ACL line."""
+    """One sentence under the disposition. It names the interface or ACL sequence."""
     disposition = str(trace.get("disposition") or "NONE").upper()
     steps = trace.get("steps") or []
     denied = disposition in {"DENIED_IN", "DENIED_OUT", "DENIED"} or any(
@@ -331,21 +333,21 @@ def _deny_sentence(steps: list[dict[str, Any]], drop: str | None, disposition: s
         acl = str(detail.get("filter") or acl)
         prefer = "outputInterface" if disposition == "DENIED_OUT" else "inputInterface"
         iface = str(detail.get(prefer) or detail.get("inputInterface") or detail.get("outputInterface") or iface)
-    line_no = ""
+    sequence = ""
     ace = ""
     if drop:
         named = re.search(r"ACL\s+(\S+)", drop)
         if named:
             acl = named.group(1)
-        lined = re.search(r"line\s+(\d+):\s*(.+)", drop)
+        lined = re.search(r"sequence\s+(\d+):\s*(.+)", drop)
         if lined:
-            line_no = lined.group(1)
+            sequence = lined.group(1)
             ace = lined.group(2).strip()
     src, dest = _ace_endpoints(ace) if ace else (None, None)
     where = _where(node, iface)
     label = f"ACL {acl}" if acl else "a filter"
-    if line_no:
-        label = f"{label} line {line_no}"
+    if sequence:
+        label = f"{label} sequence {sequence}"
     if src and dest:
         return f"Dropped because {label} on {where} denies {src} to {dest}."
     return f"Dropped because {label} on {where} denies this flow."
@@ -419,8 +421,13 @@ def format_change_diff(
     reach_before: dict[str, str],
     reach_after: dict[str, str],
     applied: int,
+    headline: str | None = None,
+    notices: list[str] | None = None,
 ) -> str:
-    lines = [f"Applied {applied} line(s). Recomputed.", "", "Routes"]
+    lines = [headline or f"Applied {applied} line(s). Recomputed."]
+    for notice in notices or []:
+        lines.append(notice)
+    lines.extend(["", "Routes"])
     route_lines = _diff_routes(routes_before, routes_after)
     lines.extend(route_lines or ["  (no route changes)"])
     lines.append("")
@@ -478,32 +485,6 @@ def vlan_names(config: str) -> dict[int, str]:
             if not re.fullmatch(r"(?i)vlan\s+\d+", line):
                 current = None
     return names
-
-
-def _access_lists(config: str) -> list[dict[str, Any]]:
-    found: list[dict[str, Any]] = []
-    current: dict[str, Any] | None = None
-    for number, raw in enumerate(config.splitlines(), start=1):
-        line = raw.strip()
-        match = re.match(r"(?i)^ip\s+access-list\s+(standard|extended)\s+(\S+)", line)
-        if match:
-            if current:
-                found.append(current)
-            current = {"kind": match.group(1).capitalize(), "name": match.group(2), "lines": []}
-            continue
-        if current is None:
-            continue
-        if not line or line.startswith("!") or re.match(r"(?i)^(interface|router|vlan|end|line|banner)\b", line):
-            found.append(current)
-            current = None
-            if line.lower().startswith("ip access-list"):
-                continue
-            continue
-        if line.lower().startswith(("permit ", "deny ", "remark ")):
-            current["lines"].append({"line": number, "text": line})
-    if current:
-        found.append(current)
-    return found
 
 
 def _format_steps(trace: dict[str, Any]) -> str:

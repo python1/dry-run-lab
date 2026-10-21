@@ -29,7 +29,7 @@ export const api = {
     return response.json() as Promise<{ engineUp: boolean; disclaimer: string; credit: string }>;
   },
   loadExample: () => request("/api/lab/load-example", { method: "POST" }),
-  addDevice: (body: { name: string; role: string; x: number; y: number }) =>
+  addDevice: (body: { name: string; role: string; x?: number; y?: number; config?: string }) =>
     request("/api/devices", { method: "POST", body: JSON.stringify(body) }),
   updateDevice: (
     name: string,

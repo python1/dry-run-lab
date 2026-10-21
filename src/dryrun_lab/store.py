@@ -140,6 +140,23 @@ def lab_from_dict(data: dict) -> Lab:
     return lab
 
 
+def place_host(lab: Lab) -> tuple[float, float]:
+    """Sit a new host under the lowest card so it does not cover a port list."""
+    if not lab.devices:
+        return 80.0, 80.0
+    left = min(device.x for device in lab.devices)
+    warned = {str(row.get("device") or "").lower() for row in lab.warnings}
+    bottom = max(_card_bottom(device, device.name.lower() in warned) for device in lab.devices)
+    return float(left), float(bottom + 64)
+
+
+def _card_bottom(device: Device, extra: bool) -> float:
+    parsed = parse_config(device.config)
+    ports = sum(1 for iface in parsed.interfaces if iface.physical)
+    height = 48 + max(ports, 1) * 26 + 12 + (22 if extra else 0)
+    return device.y + height
+
+
 def push_config(device: Device, previous: str) -> None:
     """Remember the config that is about to be replaced."""
     device.config_history.append(previous)
@@ -174,6 +191,16 @@ def apply_inference(lab: Lab) -> None:
 
 
 def add_user_link(lab: Lab, a_device: str, a_interface: str, b_device: str, b_interface: str) -> Link:
+    from dryrun_lab.configparse import canonical_interface
+
+    left = lab.device(a_device)
+    right = lab.device(b_device)
+    if left is not None:
+        a_device = left.name
+    if right is not None:
+        b_device = right.name
+    a_interface = canonical_interface(a_interface)
+    b_interface = canonical_interface(b_interface)
     key = endpoint_key(a_device, a_interface, b_device, b_interface)
     lab.dismissed = [item for item in lab.dismissed if item != key]
     for link in lab.links:

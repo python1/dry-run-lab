@@ -1,4 +1,13 @@
-from dryrun_lab.showfmt import format_ping, normalize_command, show_ip_interface_brief, show_ip_route
+from pathlib import Path
+
+from dryrun_lab.showfmt import (
+    format_change_diff,
+    format_ping,
+    normalize_command,
+    show_access_lists,
+    show_ip_interface_brief,
+    show_ip_route,
+)
 
 
 def test_command_aliases() -> None:
@@ -88,12 +97,42 @@ def test_disposition_sentence_names_the_acl_line() -> None:
                 }
             ],
         },
-        "Dropped by ACL GUEST-IN\n  line 10: deny ip 10.30.30.0 0.0.0.255 10.99.0.0 0.0.0.255\n",
+        "Dropped by ACL GUEST-IN\n  sequence 25: deny ip 10.30.30.0 0.0.0.255 10.99.0.0 0.0.0.255\n",
     )
     assert (
-        "Dropped because ACL GUEST-IN line 10 on R1 Gi0/0.30 denies 10.30.30.0/24 to 10.99.0.0/24."
+        "Dropped because ACL GUEST-IN sequence 25 on R1 Gi0/0.30 denies 10.30.30.0/24 to 10.99.0.0/24."
         in text
     )
+    assert "line 10" not in text
+
+
+def test_show_access_lists_uses_sequence_numbers() -> None:
+    config = (Path(__file__).resolve().parents[1] / "examples" / "office-lab" / "configs" / "R1.cfg").read_text(
+        encoding="utf-8"
+    )
+    text = show_access_lists(config, [])
+    assert "    10 deny ip 10.30.30.0 0.0.0.255 10.10.10.0 0.0.0.255" in text
+    assert "    20 deny ip 10.30.30.0 0.0.0.255 10.20.20.0 0.0.0.255" in text
+    assert "    30 permit ip any any" in text
+    assert text.index("    10 deny") < text.index("    20 deny") < text.index("    30 permit")
+    assert "line " not in text
+
+
+def test_change_summary_prints_the_revert_headline_and_acl_notice() -> None:
+    text = format_change_diff(
+        {},
+        {},
+        [],
+        [],
+        {},
+        {},
+        1,
+        headline="Reverted one edit. Recomputed.",
+        notices=["Line added at sequence 40, after sequence 30 permit ip any any; it will never match."],
+    )
+    assert text.startswith("Reverted one edit. Recomputed.\n")
+    assert "Applied 1 line" not in text
+    assert text.index("it will never match") < text.index("Routes")
 
 
 def test_neighbor_unreachable_names_the_interface() -> None:

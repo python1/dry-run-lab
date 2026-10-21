@@ -19,7 +19,7 @@ def test_natural_interface_order() -> None:
     assert vlan.index("Gi1/0/2") < vlan.index("Gi1/0/10")
 
 
-def test_acl_deny_is_inserted_before_permit() -> None:
+def test_unnumbered_acl_line_appends_after_permit() -> None:
     config = "ip access-list extended GUEST-IN\n permit ip any any\n!\nend\n"
     updated = apply_config_lines(
         config,
@@ -29,9 +29,9 @@ def test_acl_deny_is_inserted_before_permit() -> None:
             "end",
         ],
     )
-    deny_at = updated.index("deny ip 10.30.30.0")
-    permit_at = updated.index("permit ip any any")
-    assert deny_at < permit_at
+    assert updated.index("permit ip any any") < updated.index("deny ip 10.30.30.0")
+    assert " 10 permit ip any any" in updated
+    assert " 20 deny ip 10.30.30.0 0.0.0.255 10.99.0.0 0.0.0.255" in updated
 
 
 def test_trunk_add_keeps_existing_vlans() -> None:

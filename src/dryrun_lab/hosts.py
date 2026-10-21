@@ -16,6 +16,36 @@ from dryrun_lab.store import Lab
 _GATEWAY = re.compile(r"(?i)^ip\s+default-gateway\s+(\d+\.\d+\.\d+\.\d+)\s*$")
 
 
+def host_config(name: str, cidr: str, gateway: str) -> str:
+    """Config text for one host: Ethernet0, an address, and a default gateway."""
+    import ipaddress
+
+    try:
+        iface = ipaddress.ip_interface(cidr)
+    except ValueError as exc:
+        raise ValueError("Address must look like 10.40.40.50/24") from exc
+    if not isinstance(iface, ipaddress.IPv4Interface):
+        raise ValueError("Address must be IPv4")
+    if iface.network.prefixlen >= 31:
+        raise ValueError("Address needs a prefix length of 30 or less")
+    try:
+        gw = ipaddress.ip_address(gateway)
+    except ValueError as exc:
+        raise ValueError("Gateway must be an IPv4 address") from exc
+    if not isinstance(gw, ipaddress.IPv4Address):
+        raise ValueError("Gateway must be an IPv4 address")
+    return (
+        f"hostname {name}\n"
+        "!\n"
+        "interface Ethernet0\n"
+        f" ip address {iface.ip} {iface.netmask}\n"
+        "!\n"
+        f"ip default-gateway {gw}\n"
+        "!\n"
+        "end\n"
+    )
+
+
 def gateway_address(config: str) -> str | None:
     for raw in config.replace("\r\n", "\n").split("\n"):
         match = _GATEWAY.match(raw.strip())

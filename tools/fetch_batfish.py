@@ -6,6 +6,9 @@ org.batfish artifacts. The jar is published inside the official
 batfish/allinone image. This downloads that image layer from Docker Hub's
 registry and extracts the jar, question templates, and the matching client
 wheel. It does not start a container.
+
+The layer and the jar are checked against pinned sha256 values. A mismatch
+stops the install. There is no fallback to a floating tag.
 """
 
 from __future__ import annotations
@@ -19,11 +22,17 @@ import urllib.request
 from pathlib import Path
 
 REPO = "batfish/allinone"
-# amd64 layer of batfish/allinone:latest published with Batfish v2026.08.27.
+RELEASE = "v2026.08.27"
+# amd64 layer of batfish/allinone:v2026.08.27.
 # Manifest sha256:a8abaa304b22c13024e426ca1bdf158d0be258af44a5b538fb8f9ef74ac9d58f
 PINNED_LAYER = "sha256:53a5a598343f477bae7c97f39174d545529d2d080ed30ec3652c6e3e7ae0ac70"
+PINNED_JAR = "7552e1380e79379b17e200b80d84c1671f689cb63a0d338678c1c4675157310f"
 KEEP_PREFIXES = ("questions/",)
 KEEP_FILES = {"allinone-bundle.jar", "log4j2.yaml"}
+
+
+class BatfishPinError(RuntimeError):
+    """The downloaded layer or jar does not match the pinned sha256."""
 
 
 def main() -> int:
@@ -32,15 +41,55 @@ def main() -> int:
         return 2
     dest = Path(sys.argv[1])
     dest.mkdir(parents=True, exist_ok=True)
-    cached = (dest / "allinone-bundle.jar").is_file() and (dest / "questions" / "stable").is_dir()
-    if not cached:
-        blob = _download_pinned() or _download_by_scanning()
-        _extract(blob, dest)
-    if not (dest / "allinone-bundle.jar").is_file():
-        print("official jar was not in the image layer", file=sys.stderr)
+    try:
+        _ensure(dest)
+    except BatfishPinError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
-    _write_provenance(dest, cached=cached)
     return 0
+
+
+def _ensure(dest: Path) -> None:
+    jar = dest / "allinone-bundle.jar"
+    ready = jar.is_file() and (dest / "questions" / "stable").is_dir()
+    if ready:
+        try:
+            _check_jar(jar.read_bytes())
+        except BatfishPinError as exc:
+            print(
+                f"{exc} Cached copy rejected. Downloading the pinned layer once.",
+                file=sys.stderr,
+            )
+            jar.unlink()
+        else:
+            _write_provenance(dest, cached=True)
+            return
+    blob = _blob(PINNED_LAYER)
+    _check_blob(blob)
+    _extract(blob, dest)
+    if not jar.is_file():
+        raise BatfishPinError("official jar was not in the pinned image layer")
+    _check_jar(jar.read_bytes())
+    _write_provenance(dest, cached=False)
+
+
+def _check_blob(blob: bytes) -> None:
+    digest = hashlib.sha256(blob).hexdigest()
+    expected = PINNED_LAYER.split(":", 1)[1]
+    if digest != expected:
+        raise BatfishPinError(
+            "Batfish layer sha256 mismatch: "
+            f"got {digest}, expected {expected}. Refusing to use it."
+        )
+
+
+def _check_jar(data: bytes) -> None:
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != PINNED_JAR:
+        raise BatfishPinError(
+            "Batfish jar sha256 mismatch: "
+            f"got {digest}, expected {PINNED_JAR}. Refusing to use it."
+        )
 
 
 def _write_provenance(dest: Path, cached: bool) -> None:
@@ -50,57 +99,16 @@ def _write_provenance(dest: Path, cached: bool) -> None:
         "image": REPO,
         "layer": PINNED_LAYER,
         "source": "registry-1.docker.io",
-        "release": "v2026.08.27",
+        "release": RELEASE,
         "sha256": digest,
+        "expectedSha256": PINNED_JAR,
         "cached": cached,
     }
     (dest / "provenance.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
     print(
-        "batfish source={source} image={image} version={release} layer={layer} sha256={sha256} cached={cached}".format(
-            **info
-        )
+        "batfish source={source} image={image} version={release} layer={layer} "
+        "sha256={sha256} expected={expectedSha256} cached={cached}".format(**info)
     )
-
-
-def _download_pinned() -> bytes | None:
-    try:
-        return _blob(PINNED_LAYER)
-    except Exception as exc:
-        print(f"pinned layer failed ({exc}); resolving the latest manifest", file=sys.stderr)
-        return None
-
-
-def _download_by_scanning() -> bytes:
-    token = _token()
-    index = _json(
-        f"https://registry-1.docker.io/v2/{REPO}/manifests/latest",
-        token,
-        "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json",
-    )
-    digest = None
-    for item in index.get("manifests") or []:
-        platform = item.get("platform") or {}
-        if platform.get("os") == "linux" and platform.get("architecture") == "amd64":
-            digest = item["digest"]
-            break
-    if not digest:
-        raise RuntimeError("no linux/amd64 manifest")
-    manifest = _json(
-        f"https://registry-1.docker.io/v2/{REPO}/manifests/{digest}",
-        token,
-        "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json",
-    )
-    candidates = [
-        layer
-        for layer in manifest.get("layers") or []
-        if 40_000_000 <= int(layer.get("size") or 0) <= 120_000_000
-    ]
-    for layer in candidates:
-        blob = _blob(layer["digest"])
-        names = tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz").getnames()
-        if "allinone-bundle.jar" in names:
-            return blob
-    raise RuntimeError("could not find allinone-bundle.jar in the official image")
 
 
 def _extract(blob: bytes, dest: Path) -> None:
@@ -144,15 +152,6 @@ def _token() -> str:
     url = f"https://auth.docker.io/token?service=registry.docker.io&scope=repository:{REPO}:pull"
     with urllib.request.urlopen(url, timeout=60) as response:
         return json.loads(response.read())["token"]
-
-
-def _json(url: str, token: str, accept: str) -> dict:
-    request = urllib.request.Request(
-        url,
-        headers={"Authorization": f"Bearer {token}", "Accept": accept},
-    )
-    with _open(request) as response:
-        return json.loads(response.read())
 
 
 if __name__ == "__main__":

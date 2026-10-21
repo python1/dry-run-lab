@@ -49,6 +49,29 @@ def main(argv: list[str] | None = None) -> int:
     dismiss = sub.add_parser("dismiss", help="Reject a suggested link")
     dismiss.add_argument("link_id")
 
+    host = sub.add_parser("host", help="Add, delete, or list hosts")
+    host_sub = host.add_subparsers(dest="host_cmd", required=True)
+    host_add = host_sub.add_parser("add", help="Add a host with an address and gateway")
+    host_add.add_argument("name")
+    host_add.add_argument("--ip", required=True, help="Address with prefix, such as 10.40.40.50/24")
+    host_add.add_argument("--gw", required=True, help="Default gateway, such as 10.40.40.1")
+    host_add.add_argument("--x", type=float, default=None)
+    host_add.add_argument("--y", type=float, default=None)
+    host_delete = host_sub.add_parser("delete", help="Delete a host")
+    host_delete.add_argument("name")
+    host_sub.add_parser("list", help="List hosts")
+
+    link = sub.add_parser("link", help="Add, delete, or list cables")
+    link_sub = link.add_subparsers(dest="link_cmd", required=True)
+    link_add = link_sub.add_parser("add", help="Add a confirmed cable")
+    link_add.add_argument("a_device")
+    link_add.add_argument("a_interface")
+    link_add.add_argument("b_device")
+    link_add.add_argument("b_interface")
+    link_delete = link_sub.add_parser("delete", help="Delete a cable so it is not inferred again")
+    link_delete.add_argument("link_id")
+    link_sub.add_parser("list", help="List cables, including suggestions")
+
     args = parser.parse_args(argv)
     if args.cmd == "serve":
         from dryrun_lab.server import main as serve
@@ -110,19 +133,63 @@ def main(argv: list[str] | None = None) -> int:
                 print("(no devices)")
         elif args.cmd == "links":
             lab = _request(args.url, "GET", "/api/lab")
-            print(f"{'ID':<10} {'STATUS':<16} {'A':<28} {'B':<28} WHY")
-            for link in lab.get("links") or []:
-                left = f"{link['aDevice']} {link['aInterface']}"
-                right = f"{link['bDevice']} {link['bInterface']}"
-                why = link.get("reason") or link.get("source") or ""
-                status = link.get("status") or ""
-                if link.get("down"):
-                    status = f"{status} down"
-                print(f"{link['id']:<10} {status:<16} {left:<28} {right:<28} {why}")
-            for note in lab.get("notes") or []:
-                print(f"note: {note}")
-            if not lab.get("links"):
-                print("(no links)")
+            _print_links(lab)
+        elif args.cmd == "host":
+            if args.host_cmd == "add":
+                from dryrun_lab.hosts import host_config
+
+                config = host_config(args.name, args.ip, args.gw)
+                body: dict = {"name": args.name, "role": "host", "config": config}
+                if args.x is not None:
+                    body["x"] = args.x
+                if args.y is not None:
+                    body["y"] = args.y
+                lab = _request(args.url, "POST", "/api/devices", body)
+                added = _device(lab, args.name)
+                if added is None:
+                    raise RuntimeError(f"Host {args.name} was not added")
+                print(f"added host {added['name']} at {args.ip} gateway {args.gw}")
+                if lab.get("engineError"):
+                    print(f"error: {lab['engineError']}", file=sys.stderr)
+                    return 1
+            elif args.host_cmd == "delete":
+                lab = _request(args.url, "DELETE", f"/api/devices/{args.name}")
+                print(f"deleted host {args.name}")
+                if lab.get("engineError"):
+                    print(f"error: {lab['engineError']}", file=sys.stderr)
+                    return 1
+            else:
+                lab = _request(args.url, "GET", "/api/lab")
+                _print_hosts(lab)
+        elif args.cmd == "link":
+            if args.link_cmd == "add":
+                lab = _request(
+                    args.url,
+                    "POST",
+                    "/api/links",
+                    {
+                        "aDevice": args.a_device,
+                        "aInterface": args.a_interface,
+                        "bDevice": args.b_device,
+                        "bInterface": args.b_interface,
+                    },
+                )
+                added = _find_link(lab, args.a_device, args.a_interface, args.b_device, args.b_interface)
+                if added is None:
+                    raise RuntimeError("Cable was not added")
+                print(
+                    f"added {added['id']}: {added['aDevice']} {added['aInterface']} — "
+                    f"{added['bDevice']} {added['bInterface']}"
+                )
+                if lab.get("engineError"):
+                    print(f"error: {lab['engineError']}", file=sys.stderr)
+                    return 1
+            elif args.link_cmd == "delete":
+                _request(args.url, "DELETE", f"/api/links/{args.link_id}")
+                print(f"deleted {args.link_id}")
+            else:
+                lab = _request(args.url, "GET", "/api/lab")
+                _print_links(lab)
         elif args.cmd == "warnings":
             lab = _request(args.url, "GET", "/api/lab")
             found = _print_warnings(lab, args.device, "missed", "These lines were NOT simulated")
@@ -157,6 +224,66 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 1
     return 0
+
+
+def _device(lab: dict, name: str) -> dict | None:
+    for device in lab.get("devices") or []:
+        if str(device.get("name") or "").lower() == name.lower():
+            return device
+    return None
+
+
+def _print_hosts(lab: dict) -> None:
+    import ipaddress
+    import re
+
+    from dryrun_lab.hosts import gateway_address
+
+    print(f"{'NAME':<12} {'ADDRESS':<20} GATEWAY")
+    found = False
+    for device in lab.get("devices") or []:
+        if device.get("role") != "host":
+            continue
+        found = True
+        config = str(device.get("config") or "")
+        address = ""
+        match = re.search(
+            r"(?im)^\s*ip address\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)",
+            config,
+        )
+        if match:
+            iface = ipaddress.ip_interface(f"{match.group(1)}/{match.group(2)}")
+            address = f"{iface.ip}/{iface.network.prefixlen}"
+        gateway = gateway_address(config) or ""
+        print(f"{device['name']:<12} {address:<20} {gateway}")
+    if not found:
+        print("(no hosts)")
+
+
+def _print_links(lab: dict) -> None:
+    print(f"{'ID':<10} {'STATUS':<16} {'A':<28} {'B':<28} WHY")
+    for link in lab.get("links") or []:
+        left = f"{link['aDevice']} {link['aInterface']}"
+        right = f"{link['bDevice']} {link['bInterface']}"
+        why = link.get("reason") or link.get("source") or ""
+        status = link.get("status") or ""
+        if link.get("down"):
+            status = f"{status} down"
+        print(f"{link['id']:<10} {status:<16} {left:<28} {right:<28} {why}")
+    for note in lab.get("notes") or []:
+        print(f"note: {note}")
+    if not lab.get("links"):
+        print("(no links)")
+
+
+def _find_link(lab: dict, a_device: str, a_interface: str, b_device: str, b_interface: str) -> dict | None:
+    from dryrun_lab.infer import endpoint_key
+
+    want = endpoint_key(a_device, a_interface, b_device, b_interface)
+    for link in lab.get("links") or []:
+        if endpoint_key(link["aDevice"], link["aInterface"], link["bDevice"], link["bInterface"]) == want:
+            return link
+    return None
 
 
 def _disclaimer() -> None:

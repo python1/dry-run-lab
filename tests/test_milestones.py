@@ -11,7 +11,7 @@ import pytest
 from dryrun_lab.configparse import canonical_interface
 from dryrun_lab.engine import Engine
 from dryrun_lab.examples import load_office_lab
-from dryrun_lab.store import Device, add_user_link
+from dryrun_lab.store import Device, add_user_link, place_host
 
 def _engine_up() -> bool:
     probe = socket.socket()
@@ -140,12 +140,12 @@ def _vlan_acl_and_trunk(engine: Engine, lab) -> None:
             [
                 "configure terminal",
                 "ip access-list extended GUEST-IN",
-                "deny ip 10.30.30.0 0.0.0.255 10.99.0.0 0.0.0.255",
+                "25 deny ip 10.30.30.0 0.0.0.255 10.99.0.0 0.0.0.255",
                 "end",
             ]
         ),
     )
-    assert "DENIED" in blocked or "Dropped by ACL GUEST-IN" in blocked
+    assert "never match" not in blocked
     denied = _run(
         engine,
         lab,
@@ -155,13 +155,22 @@ def _vlan_acl_and_trunk(engine: Engine, lab) -> None:
     assert "0 percent" in denied
     assert "Dropped by ACL GUEST-IN" in denied
     assert (
-        "Dropped because ACL GUEST-IN line 10 on R1 Gi0/0.30 denies 10.30.30.0/24 to 10.99.0.0/24."
+        "Dropped because ACL GUEST-IN sequence 25 on R1 Gi0/0.30 denies 10.30.30.0/24 to 10.99.0.0/24."
         in denied
     )
     assert "deny ip 10.30.30.0 0.0.0.255 10.99.0.0 0.0.0.255" in denied
     lists = _run(engine, lab, "R1", "show access-lists")
-    assert lists.index("deny ip 10.30.30.0 0.0.0.255 10.99.0.0 0.0.0.255") < lists.index("permit ip any any")
-    _run(engine, lab, "R1", "revert")
+    guest = "deny ip 10.30.30.0 0.0.0.255 10.99.0.0 0.0.0.255"
+    assert lists.index("    10 deny") < lists.index("    20 deny") < lists.index(f"    25 {guest}")
+    assert lists.index(f"    25 {guest}") < lists.index("    30 permit ip any any")
+    assert "line " not in lists
+    reverted = _run(engine, lab, "R1", "revert")
+    assert "Reverted one edit. Recomputed." in reverted
+    assert "Applied 1 line" not in reverted
+    assert "10.30.30.50 -> 10.99.0.50" in reverted
+    assert "sequence 25" in reverted
+    assert "DENIED" in reverted
+    assert "DELIVERED_TO_SUBNET" in reverted or "ACCEPTED" in reverted
     restored = _run(
         engine,
         lab,
@@ -169,6 +178,34 @@ def _vlan_acl_and_trunk(engine: Engine, lab) -> None:
         "ping 10.99.0.1 source 10.30.30.50 ingress GigabitEthernet0/0.30",
     )
     assert "100 percent" in restored
+    assert lab.device("R1").config == baseline["R1"]
+
+    warned = _run(
+        engine,
+        lab,
+        "R1",
+        "\n".join(
+            [
+                "configure terminal",
+                "ip access-list extended GUEST-IN",
+                "deny ip 10.30.30.0 0.0.0.255 10.99.0.0 0.0.0.255",
+                "end",
+            ]
+        ),
+    )
+    assert "Line added at sequence 40, after sequence 30 permit ip any any; it will never match." in warned
+    lists = _run(engine, lab, "R1", "show access-lists")
+    assert lists.index("    30 permit ip any any") < lists.index(f"    40 {guest}")
+    still = _run(
+        engine,
+        lab,
+        "R1",
+        "ping 10.99.0.1 source 10.30.30.50 ingress GigabitEthernet0/0.30",
+    )
+    assert "100 percent" in still
+    assert "ACCEPTED" in still
+    assert "Dropped" not in still
+    _run(engine, lab, "R1", "revert")
     assert lab.device("R1").config == baseline["R1"]
 
     ospf = _run(engine, lab, "R1", "traceroute 10.255.1.1 source 10.50.0.1")
@@ -300,8 +337,14 @@ def test_host_on_vlan_40_reaches_server_until_the_sw1_sw2_trunk_is_down() -> Non
                 ]
             ),
         )
-        lab.devices.append(_host("PC40", "10.40.40.50", "10.40.40.1", 40, 620))
-        lab.devices.append(_host("SRV20", "10.20.20.50", "10.20.20.1", 880, 620))
+        x, y = place_host(lab)
+        lab.devices.append(_host("PC40", "10.40.40.50", "10.40.40.1", x, y))
+        x, y = place_host(lab)
+        lab.devices.append(_host("SRV20", "10.20.20.50", "10.20.20.1", x, y))
+        sw2 = lab.device("SW2")
+        pc40 = lab.device("PC40")
+        assert sw2 is not None and pc40 is not None
+        assert pc40.y >= sw2.y + 48 + 4 * 26 + 12 + 64
         _confirm_pair(lab, "R1", "SW1")
         _confirm_pair(lab, "SW1", "SW2")
         _confirm_pair(lab, "SW1", "SW3")
@@ -320,7 +363,7 @@ def test_host_on_vlan_40_reaches_server_until_the_sw1_sw2_trunk_is_down() -> Non
         traced = _run(engine, lab, "PC40", "traceroute 10.20.20.50")
         assert "ACCEPTED" in traced
         assert "SW2" in traced and "SW1" in traced and "R1" in traced
-        _run(
+        shut = _run(
             engine,
             lab,
             "SW1",
@@ -328,6 +371,9 @@ def test_host_on_vlan_40_reaches_server_until_the_sw1_sw2_trunk_is_down() -> Non
                 ["configure terminal", "interface GigabitEthernet1/0/2", "shutdown", "end"]
             ),
         )
+        assert "PC40" in shut and "10.20.20.50" in shut
+        assert "NEIGHBOR_UNREACHABLE" in shut
+        assert "(no reachability changes)" not in shut
         lost = _run(engine, lab, "PC40", "ping 10.20.20.50")
         assert "0 percent" in lost
         assert "NEIGHBOR_UNREACHABLE" in lost
