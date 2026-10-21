@@ -1,0 +1,6 @@
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+ensure-running text eol=lf
+bin/* text eol=lf
+*.cfg text eol=lf

@@ -1,0 +1,5 @@
+SW3#show cdp neighbors
+Capability Codes: R - Router, S - Switch, I - IGMP
+
+Device ID        Local Intrfce     Holdtme    Capability  Platform  Port ID
+SW1              Gig 0/1           154              S I   C3850     Gig 1/0/3

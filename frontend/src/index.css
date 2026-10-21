@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #14160f;
+  --color-panel: #1c2118;
+  --color-panel-2: #262c20;
+  --color-line: #3a4130;
+  --color-paper: #f4ecda;
+  --color-muted: #a8ae99;
+  --color-amber: #e2a84a;
+  --color-coral: #e15b45;
+  --color-moss: #8fbf78;
+  --color-steel: #8eb6c9;
+  --font-serif: "Iowan Old Style", Palatino, Georgia, serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ink);
+  color: var(--color-paper);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+textarea,
+input,
+select {
+  font: inherit;
+}

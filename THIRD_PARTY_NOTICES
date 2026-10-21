@@ -1,0 +1,57 @@
+Third-party software used by Dry Run Lab. Each component stays under its
+own license. This file is attribution, not a change of those terms.
+
+Batfish and pybatfish
+  Copyright 2018 The Batfish Open Source Project
+  Apache License, Version 2.0
+  https://github.com/batfish/batfish
+  The matching client wheel is taken from the official all-in-one image
+  so the client and the service are the same release. See NOTICE.
+
+Jackson (shaded inside the Batfish all-in-one jar)
+  Copyright 2007-, Tatu Saloranta
+  Apache License, Version 2.0
+  Attribution also appears in the jar's META-INF/NOTICE.
+
+FastAPI
+  Copyright Sebastián Ramírez
+  MIT License
+  https://github.com/fastapi/fastapi
+
+Uvicorn
+  Copyright Encode OSS Ltd
+  BSD 3-Clause License
+  https://github.com/encode/uvicorn
+
+React and React DOM
+  Copyright Meta Platforms, Inc. and affiliates
+  MIT License
+  https://github.com/facebook/react
+
+xterm.js (@xterm/xterm and @xterm/addon-fit)
+  Copyright xterm.js contributors
+  MIT License
+  https://github.com/xtermjs/xterm.js
+  The terminal assets are bundled with the app. The browser does not load
+  them from a network.
+
+Radix UI (dialog, slot)
+  Copyright WorkOS
+  MIT License
+  https://github.com/radix-ui/primitives
+
+Tailwind CSS
+  Copyright Tailwind Labs, Inc.
+  MIT License
+  https://github.com/tailwindlabs/tailwindcss
+
+Lucide
+  ISC License
+  https://github.com/lucide-icons/lucide
+
+class-variance-authority, clsx, tailwind-merge
+  MIT License
+
+Vite, TypeScript, and the React plugin are development tools used to
+build the static UI. They are not required on a machine that only runs
+the lab.
