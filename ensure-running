@@ -2,6 +2,36 @@
 # Idempotent starter. Safe to re-run. No systemd. Loopback only.
 set -euo pipefail
 
+OPEN=0
+for arg in "$@"; do
+  case "$arg" in
+    --open) OPEN=1 ;;
+    -h|--help)
+      cat <<'EOF'
+Usage: ./ensure-running [--open]
+
+Start Dry Run Lab on 127.0.0.1:8742 if it is not already running.
+When a lab is saved and nothing has been computed yet, reload that
+lab and recompute once the analysis engine is up. Safe to run again.
+No systemd.
+
+Run this after a computer restart and after an Update Bot's Computer
+wipe. A virtualenv left in the home folder is recreated when its
+Python interpreter is missing or no longer matches.
+
+--open    Open the lab in a browser. Off unless you pass this flag.
+          The browser uses a dedicated profile and is not asked to
+          accept anyone's terms.
+EOF
+      exit 0
+      ;;
+    *)
+      printf 'Unknown argument: %s\n' "$arg" >&2
+      exit 2
+      ;;
+  esac
+done
+
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 export DRYRUN_REPO="$ROOT"
 export DRYRUN_HOME="${DRYRUN_HOME:-$HOME/.local/share/dryrun-lab}"
@@ -132,10 +162,50 @@ start_docker() {
   wait_port 9996 90
 }
 
+python_home() {
+  dirname "$(readlink -f "$(command -v python3)")"
+}
+
+venv_matches_python() {
+  local venv="$1"
+  local cfg="$venv/pyvenv.cfg"
+  local vhome
+  [[ -x "$venv/bin/python" ]] || return 1
+  "$venv/bin/python" -c "import sys" >/dev/null 2>&1 || return 1
+  [[ -f "$cfg" ]] || return 1
+  vhome="$(sed -n 's/^home[[:space:]]*=[[:space:]]*//p' "$cfg" | head -1)"
+  [[ -n "$vhome" && "$vhome" == "$(python_home)" ]]
+}
+
+requirements_hash() {
+  ROOT="$ROOT" DATA="$DATA" python3 - <<'PY'
+import hashlib
+import os
+from pathlib import Path
+
+root = Path(os.environ["ROOT"])
+data = Path(os.environ["DATA"])
+digest = hashlib.sha256()
+digest.update((root / "pyproject.toml").read_bytes())
+wheels = sorted((data / "batfish").glob("pybatfish-*.whl"))
+if not wheels:
+    raise SystemExit("no pybatfish wheel")
+for wheel in wheels:
+    digest.update(wheel.name.encode())
+    digest.update(str(wheel.stat().st_size).encode())
+print(digest.hexdigest())
+PY
+}
+
 install_python() {
   local venv="$DATA/venv"
-  if [[ ! -x "$venv/bin/python" ]]; then
+  if ! venv_matches_python "$venv"; then
+    if [[ -d "$venv" ]]; then
+      say "Python interpreter changed or is missing; recreating the virtualenv."
+    fi
+    rm -rf "$venv"
     python3 -m venv "$venv"
+    rm -f "$DATA/venv.stamp"
   fi
   shopt -s nullglob
   local wheels=("$DATA"/batfish/pybatfish-*.whl)
@@ -144,9 +214,19 @@ install_python() {
     log "matching client wheel was not extracted next to the jar"
     return 1
   fi
-  "$venv/bin/pip" install -q --upgrade pip >>"$LOG" 2>&1
+  local want have=""
+  want="$(requirements_hash)"
+  if [[ -f "$DATA/venv.stamp" ]]; then
+    have="$(<"$DATA/venv.stamp")"
+  fi
+  if [[ "$have" == "$want" ]] && "$venv/bin/python" -c "import dryrun_lab, pybatfish, fastapi" >/dev/null 2>&1; then
+    log "venv matches requirements hash ${want}; not contacting the package index"
+    return 0
+  fi
+  say "Installing Python packages…"
   "$venv/bin/pip" install -q "${wheels[@]}" >>"$LOG" 2>&1
   "$venv/bin/pip" install -q -e "$ROOT" >>"$LOG" 2>&1
+  printf '%s\n' "$want" >"$DATA/venv.stamp"
 }
 
 start_server() {
@@ -158,7 +238,7 @@ start_server() {
   nohup "$DATA/venv/bin/python" -m dryrun_lab.server >>"$DATA/server.log" 2>&1 &
   echo $! >"$DATA/server.pid"
   local i
-  for ((i = 0; i < 30; i++)); do
+  for ((i = 0; i < 90; i++)); do
     if curl -fsS "http://127.0.0.1:8742/api/health" >>"$LOG" 2>&1; then
       return 0
     fi
@@ -169,6 +249,33 @@ start_server() {
   return 1
 }
 
+reload_saved_lab() {
+  local lab="$DATA/lab.json"
+  if [[ ! -s "$lab" ]]; then
+    log "no saved lab to recompute"
+    return 0
+  fi
+  if ! python3 - "$lab" <<'PY'
+import json
+import sys
+
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+raise SystemExit(0 if doc.get("devices") else 1)
+PY
+  then
+    log "saved lab has no devices"
+    return 0
+  fi
+  local computed
+  computed="$(curl -fsS "http://127.0.0.1:8742/api/health" | python3 -c 'import json,sys; print("yes" if json.load(sys.stdin).get("computed") else "no")')"
+  if [[ "$computed" == "yes" ]]; then
+    log "saved lab is already computed"
+    return 0
+  fi
+  log "recomputing saved lab"
+  curl -fsS -X POST "http://127.0.0.1:8742/api/recompute" >>"$LOG" 2>&1
+}
+
 install_packages
 say "Preparing Dry Run Lab…"
 python3 "$ROOT/tools/fetch_batfish.py" "$DATA/batfish"
@@ -177,9 +284,10 @@ if ! start_java; then
 fi
 install_python
 start_server
+reload_saved_lab
 say "Dry Run Lab"
 say "http://127.0.0.1:8742"
 say "CLI: $DATA/venv/bin/dryrun-lab"
-if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" && "${DRYRUN_OPEN:-1}" != "0" ]]; then
+if [[ "$OPEN" == "1" ]]; then
   "$ROOT/bin/open-lab" "http://127.0.0.1:8742" || true
 fi

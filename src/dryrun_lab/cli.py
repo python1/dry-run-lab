@@ -9,19 +9,16 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from dryrun_lab.constants import CREDIT, WEB_HOST, WEB_PORT
+from dryrun_lab.constants import CREDIT, DISCLAIMER, WEB_HOST, WEB_PORT
 from dryrun_lab.examples import load_lab_dir
-
-FOOTER = (
-    "Computed simulation. Not a live device and not proof a live network "
-    "will behave the same way."
-)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="dryrun-lab",
         description="Drive a local Dry Run Lab from the shell.",
+        epilog=f"{DISCLAIMER}\n\n{CREDIT}",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--url",
@@ -66,7 +63,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"lab: {lab.get('name')}")
             print(f"devices: {len(lab.get('devices') or [])}")
             print(f"links: {len(lab.get('links') or [])}")
-            print(f"not simulated: {lab.get('unsimulatedCount') or 0}")
+            missed, ignored = _warning_counts(lab)
+            print(f"not simulated: {missed}")
+            print(f"ignored when ip routing is enabled: {ignored}")
             if lab.get("engineError"):
                 print(f"error: {lab['engineError']}")
         elif args.cmd == "load":
@@ -91,18 +90,21 @@ def main(argv: list[str] | None = None) -> int:
                 },
             )
             print(f"loaded {imported.get('name')}: {len(imported.get('devices') or [])} devices")
+            _disclaimer()
             if imported.get("engineError"):
                 print(f"error: {imported['engineError']}", file=sys.stderr)
-                _footer()
                 return 1
         elif args.cmd == "devices":
             lab = _request(args.url, "GET", "/api/lab")
-            print(f"{'NAME':<12} {'ROLE':<8} {'INTERFACES':<12} NOT SIMULATED")
+            print(f"{'NAME':<12} {'ROLE':<8} {'INTERFACES':<12} {'NOT SIMULATED':<16} IGNORED")
             for device in lab.get("devices") or []:
+                rows = device.get("unsimulated") or []
+                missed = sum(1 for row in rows if row.get("kind") != "ignored")
+                ignored = sum(1 for row in rows if row.get("kind") == "ignored")
                 print(
                     f"{device['name']:<12} {device['role']:<8} "
                     f"{len(device.get('interfaces') or []):<12} "
-                    f"{len(device.get('unsimulated') or [])}"
+                    f"{missed:<16} {ignored}"
                 )
             if not lab.get("devices"):
                 print("(no devices)")
@@ -120,23 +122,14 @@ def main(argv: list[str] | None = None) -> int:
                 print("(no links)")
         elif args.cmd == "warnings":
             lab = _request(args.url, "GET", "/api/lab")
-            print("These lines were NOT simulated")
-            any_row = False
-            for device in lab.get("devices") or []:
-                if args.device and device["name"].lower() != args.device.lower():
-                    continue
-                rows = device.get("unsimulated") or []
-                if not rows:
-                    continue
-                any_row = True
-                print(f"\n{device['name']}")
-                for row in rows:
-                    line = row.get("line")
-                    where = f"line {line}" if line else "line ?"
-                    print(f"  {where}: {row.get('text')}")
-                    if row.get("detail"):
-                        print(f"    {row['detail']}")
-            if not any_row:
+            found = _print_warnings(lab, args.device, ignored=False, heading="These lines were NOT simulated")
+            found = _print_warnings(
+                lab,
+                args.device,
+                ignored=True,
+                heading="Ignored when ip routing is enabled",
+            ) or found
+            if not found:
                 print("(none reported)")
         elif args.cmd == "show":
             result = _request(
@@ -159,13 +152,53 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    _footer()
     return 0
 
 
-def _footer() -> None:
-    print(f"\n{FOOTER}")
+def _disclaimer() -> None:
+    print(DISCLAIMER)
     print(CREDIT)
+
+
+def _warning_counts(lab: dict) -> tuple[int, int]:
+    missed = 0
+    ignored = 0
+    for device in lab.get("devices") or []:
+        for row in device.get("unsimulated") or []:
+            if row.get("kind") == "ignored":
+                ignored += 1
+            else:
+                missed += 1
+    return missed, ignored
+
+
+def _print_warnings(lab: dict, device_name: str | None, ignored: bool, heading: str) -> bool:
+    printed = False
+    any_row = False
+    for device in lab.get("devices") or []:
+        if device_name and device["name"].lower() != device_name.lower():
+            continue
+        rows = [
+            row
+            for row in (device.get("unsimulated") or [])
+            if (row.get("kind") == "ignored") is ignored
+        ]
+        if not rows:
+            continue
+        if not printed:
+            print(heading)
+            printed = True
+        any_row = True
+        print(f"\n{device['name']}")
+        for row in rows:
+            line = row.get("line")
+            where = f"line {line}" if line else "line ?"
+            print(f"  {where}: {row.get('text')}")
+            if row.get("detail"):
+                print(f"    {row['detail']}")
+    if any_row:
+        print()
+    return any_row
 
 
 def _request(base: str, method: str, path: str, body: dict | None = None) -> dict:

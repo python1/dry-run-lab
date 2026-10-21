@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import re
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -23,11 +25,37 @@ from dryrun_lab.store import (
     public_lab,
 )
 
+log = logging.getLogger("dryrun_lab.server")
 _NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,31}$")
-
-app = FastAPI(title="Dry Run Lab", docs_url=None, redoc_url=None, openapi_url=None)
 _store = Store(data_home() / "lab.json")
 _engine = Engine()
+
+
+def warm_saved_lab() -> None:
+    """Recompute the lab saved on disk once the engine is listening.
+
+    A new process has an empty cache. Show commands would otherwise answer
+    503 until somebody loaded the lab again.
+    """
+    try:
+        if not _store.lab.devices or not _engine.healthy():
+            return
+        with _store.lock:
+            if _engine._ready:
+                return
+            _engine.recompute(_store.lab)
+            _store.save()
+    except Exception:
+        log.exception("could not recompute the saved lab at startup")
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    warm_saved_lab()
+    yield
+
+
+app = FastAPI(title="Dry Run Lab", docs_url=None, redoc_url=None, openapi_url=None, lifespan=_lifespan)
 
 
 class DeviceIn(BaseModel):
@@ -95,6 +123,7 @@ def health() -> dict:
     return {
         "ok": True,
         "engineUp": _engine.healthy(),
+        "computed": _engine._ready,
         "disclaimer": DISCLAIMER,
         "credit": CREDIT,
     }

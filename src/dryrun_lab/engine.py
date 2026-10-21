@@ -13,6 +13,7 @@ from typing import Any
 
 from dryrun_lab.configparse import canonical_interface
 from dryrun_lab.constants import COMPUTED_TAG, ENGINE_HOST, ENGINE_PORT
+from dryrun_lab.facts import annotate_warnings
 from dryrun_lab.paths import data_home
 from dryrun_lab.showfmt import (
     command_help,
@@ -98,10 +99,7 @@ class Engine:
         if kind == "warnings":
             rows = [row for row in lab.warnings if row.get("device") == device.name]
             return _wrap(device.name, command, show_unsimulated(device.name, rows))
-        if not self._ready:
-            if lab.engine_error:
-                raise EngineUnavailable(lab.engine_error)
-            raise EngineUnavailable("Nothing has been computed yet.")
+        self._ensure_ready(lab)
         key = device.name.lower()
         if kind == "interfaces":
             body = show_ip_interface_brief(self._interfaces.get(key, []))
@@ -117,6 +115,17 @@ class Engine:
 
         self._session = Session(host=self.host, port=self.port)
         return self._session
+
+    def _ensure_ready(self, lab: Lab) -> None:
+        if self._ready:
+            return
+        if lab.devices and self.healthy():
+            self.recompute(lab)
+        if self._ready:
+            return
+        if lab.engine_error:
+            raise EngineUnavailable(lab.engine_error)
+        raise EngineUnavailable("Nothing has been computed yet.")
 
     def _write_snapshot(self, lab: Lab) -> Path:
         root = data_home() / "snapshot"
@@ -257,7 +266,8 @@ def _attach_devices(rows: list[dict[str, Any]], lab: Lab) -> list[dict[str, Any]
         stem = filename.replace("\\", "/").rsplit("/", 1)[-1].lower()
         device = by_file.get(stem)
         attached.append({**row, "device": device})
-    return attached
+    configs = {device.name: device.config for device in lab.devices}
+    return annotate_warnings(attached, configs)
 
 
 _IFACE_REF = re.compile(r"^([^[]+)\[(.+)]$")

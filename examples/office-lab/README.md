@@ -31,6 +31,11 @@ R1 routes between VLANs 10, 20, 30, and 99 with dot1Q subinterfaces on `Gi0/0` (
 
 VLAN 99 (`10.99.0.0/24`) is a shared management subnet, not a cable. The lab must not turn it into a full mesh.
 
-## Lines the analyzer refuses
+## Lines the analyzer does not model
 
-Each device has `ip default-gateway`. The engine reports that feature as not currently supported, so those lines show up as **not simulated**. Other lines in these files are parsed. The stage 1 report lists the exact lines returned on a load, not a guess.
+Each device has `ip default-gateway`. The lab checks that device's own config, not the hostname.
+
+- R1 and SW1 contain `ip routing`. On those devices the line is reported as **ignored when ip routing is enabled**.
+- SW2 and SW3 do not contain `ip routing`. Those lines stay in the **not simulated** list. The engine's detail remains that the feature is not currently supported.
+
+`no ip routing` after `ip routing` would put the device back in the not-simulated list. Other lines in these files are parsed.

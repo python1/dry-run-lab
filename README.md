@@ -20,11 +20,19 @@ The script is idempotent. It installs a JDK 21 if `java` is missing or older, do
 http://127.0.0.1:8742
 ```
 
-Open that URL on the same machine. The server listens on `127.0.0.1` only. The page fills the browser window. On a desktop, `bin/open-lab` opens it maximized, and `./ensure-running` does that when a display is available.
+Open that URL on the same machine. The server listens on `127.0.0.1` only. The page fills the browser window. `./ensure-running` does not open a browser. Pass `--open` when you want one:
 
-Run it again any time. If the engine and the lab are already healthy, it leaves them running and prints the same URL.
+```bash
+./ensure-running --open
+```
 
-Data, the jar, and the virtualenv live in `$DRYRUN_HOME` (default `$HOME/.local/share/dryrun-lab`). Logs are `ensure.log`, `batfish.log`, and `server.log` in that directory.
+`bin/open-lab` is what `--open` runs. It reuses a window that is already showing Dry Run Lab. Otherwise it starts the browser with its own profile, `--no-first-run`, and `--no-default-browser-check`. It does not accept terms or click through dialogs.
+
+Run `./ensure-running` again after a computer restart, and after an Update Bot's Computer wipe. If the engine is already up and a saved lab has not been computed in this process, the script reloads that lab and recomputes. You do not have to load the lab by hand before show commands work.
+
+A virtualenv under `$DRYRUN_HOME` (default `$HOME/.local/share/dryrun-lab`) is reused when it matches the pinned requirements and the same Python interpreter. Those runs do not contact the package index. If that Python is missing or has changed, the virtualenv is created again. A home-folder virtualenv can survive a wipe while the interpreter it points at does not.
+
+Data, the jar, and the virtualenv live in `$DRYRUN_HOME`. Logs are `ensure.log`, `batfish.log`, and `server.log` in that directory.
 
 ## Shell
 
@@ -40,7 +48,7 @@ bin/dryrun-lab show R1 "show ip interface brief"
 bin/dryrun-lab show R1 "show running-config"
 ```
 
-The CLI only talks to `127.0.0.1` or `localhost`. It reads config files locally and posts the text to the lab. Each show transcript is tagged `[computed]`. The full limit stays in the lab banner.
+The CLI only talks to `127.0.0.1` or `localhost`. It reads config files locally and posts the text to the lab. Each show transcript is tagged `[computed]`. `bin/dryrun-lab --help` and `bin/dryrun-lab load` print the full limit. Other commands do not repeat it. The same limit stays in the lab banner.
 
 Supported device-CLI commands in this stage: `show running-config`, `show ip interface brief`, `show ip route`, and `show warnings`. Pipes are refused.
 
@@ -50,7 +58,7 @@ Supported device-CLI commands in this stage: `show running-config`, `show ip int
 
 One router (router-on-a-stick, OSPF on a `/30`, one extended ACL) and three switches (VLANs, trunks, access ports). Load it from the UI with **Load office lab**, or with the CLI command above. Dashed cables are suggestions. Confirm or dismiss each one. Shared management subnets are notes, not cables.
 
-Each example device contains `ip default-gateway`. Batfish reports that line as not simulated. The UI lists those lines in red under **These lines were NOT simulated**.
+Each example device contains `ip default-gateway`. The lab reads that device's config: if `ip routing` is enabled, the line is **ignored when ip routing is enabled** (R1 and SW1). If it is not, the line stays in the **not simulated** list (SW2 and SW3). The hostname is not special-cased.
 
 ## What this stage computes
 
@@ -91,9 +99,13 @@ python3 -m venv .venv
 
 `tests/test_engine_office.py` runs only when something is already listening on `127.0.0.1:9996`. The lab install does not pull a test runner.
 
+## Assistant template
+
+`bot/instructions.md` and `bot/skills/getting-started/SKILL.md` tell an assistant on this computer to run `./ensure-running` from the repository root before any lab command. That includes after a restart and after an Update Bot's Computer wipe. The skill does not open a browser unless someone asked for `--open`.
+
 ## Later
 
-Still to build, on purpose: VLAN and trunk show commands, access-list show commands, computed ping and traceroute, config edits with a before/after diff, and the milestone labs (a VLAN end to end, an ACL that blocks a flow, a trunk that drops reachability). Packaging for an assistant template comes after that.
+Still to build, on purpose: VLAN and trunk show commands, access-list show commands, computed ping and traceroute, config edits with a before/after diff, and the milestone labs (a VLAN end to end, an ACL that blocks a flow, a trunk that drops reachability).
 
 ## License
 

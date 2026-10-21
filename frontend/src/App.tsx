@@ -107,6 +107,8 @@ export default function App() {
 
   const suggestions = lab?.links.filter((link) => link.status === "suggested") ?? [];
   const unsimulated = device?.unsimulated ?? [];
+  const missed = unsimulated.filter((row) => row.kind !== "ignored");
+  const ignored = unsimulated.filter((row) => row.kind === "ignored");
 
   return (
     <div className="flex h-dvh w-screen flex-col overflow-hidden">
@@ -207,7 +209,14 @@ export default function App() {
                   <span>{item.name}</span>
                   <Badge tone={item.role === "router" ? "amber" : "steel"}>{item.role}</Badge>
                 </span>
-                {item.unsimulated.length > 0 && <Badge tone="coral">{item.unsimulated.length}</Badge>}
+                {item.unsimulated.some((row) => row.kind !== "ignored") && (
+                  <Badge tone="coral">
+                    {item.unsimulated.filter((row) => row.kind !== "ignored").length}
+                  </Badge>
+                )}
+                {item.unsimulated.some((row) => row.kind === "ignored") && (
+                  <Badge tone="amber">ignored</Badge>
+                )}
               </button>
             ))}
             {!lab?.devices.length && <p className="px-2 text-sm text-muted">No devices yet.</p>}
@@ -310,13 +319,17 @@ export default function App() {
               >
                 Save and recompute
               </Button>
-              <div className="rounded-md border border-coral/60 bg-coral/10 p-3">
-                <h3 className="text-sm font-semibold text-coral">These lines were NOT simulated</h3>
-                {unsimulated.length === 0 ? (
+              {missed.length === 0 && ignored.length === 0 ? (
+                <div className="rounded-md border border-line p-3">
+                  <h3 className="text-sm font-semibold text-paper">Lines the engine did not model</h3>
                   <p className="mt-2 text-xs text-muted">No unparsed lines reported for this device.</p>
-                ) : (
+                </div>
+              ) : null}
+              {missed.length > 0 && (
+                <div className="rounded-md border border-coral/60 bg-coral/10 p-3">
+                  <h3 className="text-sm font-semibold text-coral">These lines were NOT simulated</h3>
                   <ul className="mt-2 space-y-2">
-                    {unsimulated.map((row, index) => (
+                    {missed.map((row, index) => (
                       <li key={`${row.line}-${index}`} className="text-xs">
                         <div className="font-mono text-coral">
                           {row.line ? `line ${row.line}: ` : ""}
@@ -326,8 +339,24 @@ export default function App() {
                       </li>
                     ))}
                   </ul>
-                )}
-              </div>
+                </div>
+              )}
+              {ignored.length > 0 && (
+                <div className="rounded-md border border-amber/50 bg-amber/10 p-3">
+                  <h3 className="text-sm font-semibold text-amber">Ignored when ip routing is enabled</h3>
+                  <ul className="mt-2 space-y-2">
+                    {ignored.map((row, index) => (
+                      <li key={`${row.line}-${index}`} className="text-xs">
+                        <div className="font-mono text-amber">
+                          {row.line ? `line ${row.line}: ` : ""}
+                          {row.text}
+                        </div>
+                        <div className="text-paper/80">{row.detail}</div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           ) : (
             <p className="px-3 text-sm text-muted">Select a device to paste its config.</p>

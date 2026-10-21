@@ -24,16 +24,22 @@ _PROTOCOL = {
 
 
 def show_running_config(config: str, unsimulated: list[dict[str, Any]]) -> str:
+    missed = [row for row in unsimulated if row.get("kind") != "ignored"]
+    ignored = [row for row in unsimulated if row.get("kind") == "ignored"]
     lines = [
         "! Loaded config. This is the text the lab simulated, not a live readout.",
     ]
-    if unsimulated:
+    if missed:
         lines.append(
-            f"! {len(unsimulated)} line(s) were NOT simulated. "
+            f"! {len(missed)} line(s) were NOT simulated. "
             "See the warning list for the text."
         )
     else:
         lines.append("! No unparsed lines were reported for this device.")
+    if ignored:
+        lines.append(
+            f"! {len(ignored)} line(s) ignored when ip routing is enabled."
+        )
     lines.append("!")
     body = config.replace("\r\n", "\n").rstrip()
     return "\n".join(lines + [body, ""])
@@ -115,16 +121,32 @@ def show_ip_route(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def show_unsimulated(device: str, rows: list[dict[str, Any]]) -> str:
-    lines = [f"These lines were NOT simulated on {device}", ""]
-    if not rows:
-        lines.append("(none reported)")
-        return "\n".join(lines) + "\n"
+def _warning_lines(rows: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
     for row in rows:
         where = f"line {row.get('line')}" if row.get("line") else "line ?"
         lines.append(f"  {where}: {row.get('text') or ''}".rstrip())
         if row.get("detail"):
             lines.append(f"    {row['detail']}")
+    return lines
+
+
+def show_unsimulated(device: str, rows: list[dict[str, Any]]) -> str:
+    ignored = [row for row in rows if row.get("kind") == "ignored"]
+    missed = [row for row in rows if row.get("kind") != "ignored"]
+    if not ignored and not missed:
+        return f"No unparsed lines were reported for {device}\n"
+    lines: list[str] = []
+    if missed:
+        lines.append(f"These lines were NOT simulated on {device}")
+        lines.append("")
+        lines.extend(_warning_lines(missed))
+    if ignored:
+        if lines:
+            lines.append("")
+        lines.append(f"Ignored when ip routing is enabled on {device}")
+        lines.append("")
+        lines.extend(_warning_lines(ignored))
     return "\n".join(lines) + "\n"
 
 

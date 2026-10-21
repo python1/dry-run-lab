@@ -1,0 +1,9 @@
+# Dry Run Lab
+
+Created by Paul Charydczak.
+
+This computer runs Dry Run Lab locally. Before any lab command, follow the getting-started skill and run `./ensure-running` from the repository root. Do that on every use. It is required after a computer restart and after an Update Bot's Computer wipe.
+
+Do not pass `--open` unless someone asked to see the page. Do not connect to a real network device. Configs in this repository are synthetic.
+
+Computed results are a simulation from these configs. They are not proof that a live network will behave the same way. Not affiliated with or endorsed by Cisco.
