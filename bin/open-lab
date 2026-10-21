@@ -13,6 +13,32 @@ launch() {
   nohup "$@" >/dev/null 2>&1 &
 }
 
+# A browser that is already running can ignore --start-maximized.
+# Ask the window manager once the lab window exists.
+maximize_lab_window() {
+  if ! command -v xdotool >/dev/null 2>&1; then
+    return 0
+  fi
+  local n id sw=0 sh=0
+  if command -v xdpyinfo >/dev/null 2>&1; then
+    read -r sw sh < <(xdpyinfo 2>/dev/null | awk '/dimensions:/ {split($2, a, "x"); print a[1], a[2]; exit}')
+  fi
+  if [[ "$sw" -le 0 || "$sh" -le 0 ]]; then
+    return 0
+  fi
+  # A new window can appear after Chrome attaches to the running session.
+  for ((n = 0; n < 6; n++)); do
+    while read -r id; do
+      [[ -z "$id" ]] && continue
+      xdotool windowactivate "$id" >/dev/null 2>&1 || true
+      xdotool windowmove "$id" 0 0 >/dev/null 2>&1 || true
+      xdotool windowsize "$id" "$sw" "$sh" >/dev/null 2>&1 || true
+    done < <(xdotool search --name "Dry Run Lab" 2>/dev/null || true)
+    sleep 0.35
+  done
+  return 0
+}
+
 browser=""
 for candidate in google-chrome google-chrome-stable chromium chromium-browser microsoft-edge; do
   if command -v "$candidate" >/dev/null 2>&1; then
@@ -23,20 +49,20 @@ done
 
 if [[ -n "$browser" ]]; then
   launch "$browser" --start-maximized --new-window "$URL"
+  sleep 1
+  maximize_lab_window
   exit 0
 fi
 
 if command -v firefox >/dev/null 2>&1; then
   launch firefox --new-window "$URL"
-  if command -v wmctrl >/dev/null 2>&1; then
-    sleep 0.6
-    wmctrl -a "Dry Run Lab" -b add,maximized_vert,maximized_horz >/dev/null 2>&1 || true
-  fi
+  maximize_lab_window
   exit 0
 fi
 
 if command -v xdg-open >/dev/null 2>&1; then
   launch xdg-open "$URL"
+  maximize_lab_window
   exit 0
 fi
 
