@@ -52,6 +52,7 @@ export const api = {
     request(`/api/devices/${encodeURIComponent(name)}`, { method: "DELETE" }),
   link: (body: { aDevice: string; aInterface: string; bDevice: string; bInterface: string }) =>
     request("/api/links", { method: "POST", body: JSON.stringify(body) }),
+  deleteLink: (id: string) => request(`/api/links/${encodeURIComponent(id)}`, { method: "DELETE" }),
   confirm: (id: string) => request(`/api/links/${id}/confirm`, { method: "POST" }),
   dismiss: (id: string) => request(`/api/links/${id}/dismiss`, { method: "POST" }),
   show: async (device: string, command: string) => {

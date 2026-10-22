@@ -1,10 +1,11 @@
 """IOS-XE checks for lines typed in configuration mode.
 
 Keywords are accepted in any case. A line that is not a real command is
-rejected before it joins the pending edit. Sequence numbers in
-`show running-config` follow the 16.12 rule: from IOS-XE 16.12 they are
-stored in the displayed config. Remarks are numbered the same way; that
-part is unconfirmed.
+rejected before it joins the pending edit. At global config, a real IOS
+command this lab does not apply is stored and the prompt says it was kept
+but not simulated. Sequence numbers in `show running-config` follow the
+16.12 rule: from IOS-XE 16.12 they are stored in the displayed config.
+Remarks are numbered the same way; that part is unconfirmed.
 """
 
 from __future__ import annotations
@@ -66,6 +67,7 @@ _WORDS = {
     "switchport",
     "udld",
     "username",
+    "version",
     "vlan",
     "vrrp",
     "vtp",
@@ -108,6 +110,7 @@ HARMLESS = (
 )
 
 VERSION_NOTE = "No version line found; assuming IOS-XE 16.12 or later"
+KEPT_NOTE = "% Not simulated in this version. The line was kept.\n"
 
 
 def invalid_input(draft: list[str], line: str) -> str | None:
@@ -182,10 +185,37 @@ def sequences_nvgen(config: str) -> bool:
     return major > 16 or (major == 16 and minor >= 12)
 
 
-def version_note(config: str) -> str | None:
+def version_note(config: str, *, role: str | None = None) -> str | None:
+    """Note for a router or switch with no `version` line.
+
+    A host does not run an IOS image, so it never gets this sentence.
+    Omitting `role` keeps the note, which is the check used before a
+    device role is known. Sequence display is unchanged either way.
+    """
+    if role == "host":
+        return None
     if version_tuple(config) is None:
         return VERSION_NOTE
     return None
+
+
+def kept_note(draft: list[str], line: str) -> str | None:
+    """Prompt text for a global line that is stored and not applied.
+
+    Applied commands and harmless lines stay quiet. Inside an interface,
+    VLAN, router, or ACL stanza the prompt stays quiet too; those lines
+    are judged when the edit is committed. A rejected line has no note.
+    """
+    text = " ".join(line.strip().split())
+    if not text or text.startswith("!"):
+        return None
+    if invalid_input(draft, text):
+        return None
+    if _opens_stanza(text) or _context(draft) is not None:
+        return None
+    if _applied_global(text) or _harmless_feature(text):
+        return None
+    return KEPT_NOTE
 
 
 def display_config(config: str) -> str:
@@ -439,16 +469,50 @@ def _global_line(text: str) -> str | None:
         return None
     if lower in {"ip routing", "no ip routing", "no ip source-route", "ip source-route", "ip cef"}:
         return None
-    if any(pattern.match(text) for pattern in BEHAVIOR_UNMODELED):
+    if re.fullmatch(r"version\s+\d+\.\d+(?:\.\d+)?", lower):
         return None
-    if any(pattern.match(text) for pattern in HARMLESS):
+    if lower.startswith("version"):
+        return _marked(text, 0)
+    feature = _feature_text(text)
+    if any(pattern.match(feature) for pattern in BEHAVIOR_UNMODELED):
+        return None
+    if any(pattern.match(feature) for pattern in HARMLESS):
         return None
     word = parts[0]
     if word.lower() == "no" and len(parts) > 1:
         word = parts[1]
+    if word.lower() in _WORDS:
+        return None
     if _near_miss(word):
         return _at(text, word)
-    return None
+    return _marked(text, 0)
+
+
+def _feature_text(text: str) -> str:
+    """Drop a leading `no`, so `no spanning-tree` is the same feature."""
+    parts = text.split()
+    if parts and parts[0].lower() == "no" and len(parts) > 1:
+        return " ".join(parts[1:])
+    return text
+
+
+def _applied_global(text: str) -> bool:
+    """Global commands this lab applies. The prompt stays quiet for these."""
+    lower = text.lower()
+    if lower.startswith(
+        ("hostname ", "interface ", "ip access-list ", "router ", "ip route ", "ip default-gateway ")
+    ):
+        return True
+    if re.fullmatch(r"vlan\s+\d+", lower):
+        return True
+    if lower in {"ip routing", "no ip routing", "no ip source-route", "ip source-route", "ip cef"}:
+        return True
+    return re.fullmatch(r"version\s+\d+\.\d+(?:\.\d+)?", lower) is not None
+
+
+def _harmless_feature(text: str) -> bool:
+    feature = _feature_text(text)
+    return any(pattern.match(feature) for pattern in HARMLESS)
 
 
 def _strip_acl_sequences(config: str) -> str:

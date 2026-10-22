@@ -8,7 +8,7 @@ import { Button } from "./components/ui/button";
 import { Dialog, DialogContent } from "./components/ui/dialog";
 import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
-import type { Lab, Role } from "./types";
+import type { Lab, Role, WarningRow } from "./types";
 
 const DISCLAIMER =
   "Computed results are a simulation from these configs. They are not proof that a live network will behave the same way. Not affiliated with or endorsed by Cisco.";
@@ -43,6 +43,8 @@ export default function App() {
   const [addMask, setAddMask] = useState("");
   const [addGateway, setAddGateway] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [cableStatus, setCableStatus] = useState<string | null>(null);
+  const busyRef = useRef(false);
   const [fitNonce, setFitNonce] = useState(0);
   const [terminalHeight, setTerminalHeight] = useState(readSplit);
   const [stamp, setStamp] = useState("");
@@ -56,9 +58,15 @@ export default function App() {
     }
   }, [terminalHeight]);
 
-  async function run(action: () => Promise<Lab>) {
+  async function run(action: () => Promise<Lab>, pendingLabel?: string) {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     setError(null);
+    if (pendingLabel) {
+      setCableStatus(pendingLabel);
+      setNotice(null);
+    }
     try {
       const next = await action();
       if (next.notice) setNotice(next.notice);
@@ -66,7 +74,9 @@ export default function App() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
     } finally {
+      busyRef.current = false;
       setBusy(false);
+      setCableStatus(null);
     }
   }
 
@@ -94,6 +104,7 @@ export default function App() {
   }, [device?.name, device?.config, device?.neighborText]);
 
   function onPort(name: string, iface: string) {
+    if (busyRef.current) return;
     if (!pending) {
       setPending({ device: name, iface });
       return;
@@ -113,7 +124,12 @@ export default function App() {
       bInterface: iface,
     };
     setPending(null);
-    void run(() => api.link(body));
+    void run(() => api.link(body), "Adding cable…");
+  }
+
+  function onRemove(id: string) {
+    if (busyRef.current) return;
+    void run(() => api.deleteLink(id), "Removing cable…");
   }
 
   const suggestions = lab?.links.filter((link) => link.status === "suggested") ?? [];
@@ -140,13 +156,18 @@ export default function App() {
         </div>
         <div className="hidden text-right text-xs text-muted sm:block">
           <div>{CREDIT}</div>
-          <div>{busy ? "Computing…" : "Configs stay on this machine"}</div>
+          <div>{cableStatus ?? (busy ? "Computing…" : "Configs stay on this machine")}</div>
         </div>
       </header>
       <div className="border-b border-amber/40 bg-amber/10 px-4 py-2 text-sm text-amber">{DISCLAIMER}</div>
       {(error || lab?.engineError) && (
         <div className="border-b border-coral/50 bg-coral/15 px-4 py-2 text-sm text-coral">
           {error || lab?.engineError}
+        </div>
+      )}
+      {cableStatus && (
+        <div className="border-b border-steel/40 bg-steel/10 px-4 py-2 text-sm text-steel" role="status">
+          {cableStatus}
         </div>
       )}
       {notice && (
@@ -293,10 +314,19 @@ export default function App() {
                   </div>
                   <div className="mt-1 text-muted">{link.reason}</div>
                   <div className="mt-2 flex gap-2">
-                    <Button size="sm" onClick={() => void run(() => api.confirm(link.id))} disabled={busy}>
+                    <Button
+                      size="sm"
+                      onClick={() => void run(() => api.confirm(link.id), "Confirming cable…")}
+                      disabled={busy}
+                    >
                       Confirm
                     </Button>
-                    <Button size="sm" variant="ghost" onClick={() => void run(() => api.dismiss(link.id))} disabled={busy}>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => void run(() => api.dismiss(link.id), "Rejecting cable…")}
+                      disabled={busy}
+                    >
                       Dismiss
                     </Button>
                   </div>
@@ -323,6 +353,8 @@ export default function App() {
               }}
               onMove={(name, x, y) => void run(() => api.updateDevice(name, { x, y }))}
               onPort={onPort}
+              onRemove={onRemove}
+              busy={busy}
             />
           ) : (
             <div className="flex h-full items-center justify-center text-muted">Loading the lab…</div>
@@ -382,7 +414,7 @@ export default function App() {
                   <h3 className="text-sm font-semibold text-steel">Not modeled</h3>
                   <ul className="mt-2 space-y-2">
                     {limits.map((row, index) => (
-                      <li key={`${row.text}-${index}`} className="text-xs">
+                      <li key={warningKey(row, index)} className="text-xs">
                         <div className="font-mono text-steel">{row.text}</div>
                         <div className="text-paper/80">{row.detail}</div>
                       </li>
@@ -395,7 +427,7 @@ export default function App() {
                   <h3 className="text-sm font-semibold text-amber">Will never match</h3>
                   <ul className="mt-2 space-y-2">
                     {unreachable.map((row, index) => (
-                      <li key={`${row.text}-${index}`} className="text-xs">
+                      <li key={warningKey(row, index)} className="text-xs">
                         <div className="font-mono text-amber">{row.text}</div>
                         <div className="text-paper/80">{row.detail}</div>
                       </li>
@@ -414,9 +446,9 @@ export default function App() {
                   <h3 className="text-sm font-semibold text-coral">These lines were NOT simulated</h3>
                   <ul className="mt-2 space-y-2">
                     {missed.map((row, index) => (
-                      <li key={`${row.line}-${index}`} className="text-xs">
+                      <li key={warningKey(row, index)} className="text-xs">
                         <div className="font-mono text-coral">
-                          {row.line ? `line ${row.line}: ` : ""}
+                          {warningWhere(row)}
                           {row.text}
                         </div>
                         <div className="text-paper/80">{row.detail}</div>
@@ -430,9 +462,9 @@ export default function App() {
                   <h3 className="text-sm font-semibold text-amber">Ignored when ip routing is enabled</h3>
                   <ul className="mt-2 space-y-2">
                     {ignored.map((row, index) => (
-                      <li key={`${row.line}-${index}`} className="text-xs">
+                      <li key={warningKey(row, index)} className="text-xs">
                         <div className="font-mono text-amber">
-                          {row.line ? `line ${row.line}: ` : ""}
+                          {warningWhere(row)}
                           {row.text}
                         </div>
                         <div className="text-paper/80">{row.detail}</div>
@@ -577,6 +609,15 @@ export default function App() {
       </Dialog>
     </div>
   );
+}
+
+function warningKey(row: WarningRow, index: number) {
+  return `${row.device ?? ""}|${row.file}|${row.line ?? ""}|${index}`;
+}
+
+function warningWhere(row: WarningRow) {
+  const place = [row.file, row.line ? `line ${row.line}` : ""].filter(Boolean).join(" ");
+  return place ? `${place}: ` : "";
 }
 
 function nameOk(name: string) {

@@ -26,7 +26,7 @@ from dryrun_lab.configparse import canonical_interface, parse_config
 from dryrun_lab.constants import COMPUTED_TAG, ENGINE_HOST, ENGINE_PORT
 from dryrun_lab.facts import annotate_warnings
 from dryrun_lab.hosts import host_document, host_limits
-from dryrun_lab.ioscheck import fold_line, invalid_input, is_harmless, unmodeled_lines
+from dryrun_lab.ioscheck import fold_line, invalid_input, is_harmless, kept_note, unmodeled_lines
 from dryrun_lab.infer import endpoint_key
 from dryrun_lab.l2path import layer2_note
 from dryrun_lab.paths import data_home
@@ -256,7 +256,11 @@ class Engine:
             return enable, _wrap(device.name, command, detail), False, False
         if kind == "running-config":
             rows = [row for row in lab.warnings if row.get("device") == device.name]
-            return enable, _wrap(device.name, command, show_running_config(device.config, rows)), False, True
+            return enable, _wrap(
+                device.name,
+                command,
+                show_running_config(device.config, rows, role=device.role),
+            ), False, True
         if kind == "warnings":
             rows = [row for row in lab.warnings if row.get("device") == device.name]
             return enable, _wrap(device.name, command, show_unsimulated(device.name, rows)), False, True
@@ -357,10 +361,11 @@ class Engine:
                 False,
                 False,
             )
+        note = kept_note(draft, command.strip()) or ""
         draft.append(fold_line(command.strip()))
         return (
             prompt_for(device.name, draft),
-            _wrap(device.name, command, "", prompt=current, computed=False),
+            _wrap(device.name, command, note, prompt=current, computed=False),
             False,
             True,
         )
@@ -863,6 +868,7 @@ def _records(frame: Any) -> list[dict[str, Any]]:
 
 def _warnings(session: Any) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    # Same text on two lines stays two warnings. The key is the file and the line.
     seen: set[tuple[str, str, str]] = set()
     try:
         parsed = _records(session.q.parseWarning().answer().frame())
@@ -955,17 +961,28 @@ def _attach_devices(rows: list[dict[str, Any]], lab: Lab) -> list[dict[str, Any]
 
 
 def _with_local_warnings(rows: list[dict[str, Any]], configs: dict[str, str]) -> list[dict[str, Any]]:
-    """Flag unmodeled forwarding lines, and drop lines that do not affect forwarding."""
+    """Flag unmodeled forwarding lines, and drop lines that do not affect forwarding.
+
+    A warning is one device and one line. The same text on another interface,
+    or on another device, is a different line and stays in the list. A row
+    the engine already reported for that device and line is not repeated.
+    """
     kept = [row for row in rows if not is_harmless(str(row.get("text") or ""))]
-    seen = {str(row.get("text") or "").strip().lower() for row in kept}
+    covered: set[tuple[str, int]] = set()
+    for row in kept:
+        device = str(row.get("device") or "")
+        line = _as_int(row.get("line"))
+        if device and line is not None:
+            covered.add((device.lower(), line))
     for device, config in configs.items():
         for line_no, text in unmodeled_lines(config):
-            if text.lower() in seen:
+            key = (device.lower(), line_no)
+            if key in covered:
                 continue
-            seen.add(text.lower())
+            covered.add(key)
             kept.append(
                 {
-                    "file": f"{device}.cfg",
+                    "file": f"configs/{_safe_name(device)}.cfg",
                     "line": line_no,
                     "text": text,
                     "detail": "not simulated",
@@ -1156,7 +1173,7 @@ def _notices_for_added(
 def _unreachable_warning(device_name: str, acl: Any, ace: Any, blockers: list[str]) -> dict[str, Any]:
     return {
         "device": device_name,
-        "file": f"{_safe_name(device_name)}.cfg",
+        "file": f"configs/{_safe_name(device_name)}.cfg",
         "line": None,
         "text": shadow_sentence(acl, ace, blockers),
         "detail": f"ACL {acl.name} sequence {ace.seq}",

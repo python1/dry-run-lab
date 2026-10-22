@@ -56,17 +56,21 @@ export function Topology({
   selected,
   pending,
   fitNonce,
+  busy,
   onSelect,
   onMove,
   onPort,
+  onRemove,
 }: {
   lab: Lab;
   selected: string | null;
   pending: { device: string; iface: string } | null;
   fitNonce: number;
+  busy: boolean;
   onSelect: (name: string) => void;
   onMove: (name: string, x: number, y: number) => void;
   onPort: (device: string, iface: string) => void;
+  onRemove: (id: string) => void;
 }) {
   const [pos, setPos] = useState<Record<string, { x: number; y: number }>>({});
   const [drag, setDrag] = useState<{ name: string; dx: number; dy: number } | null>(null);
@@ -302,15 +306,30 @@ export function Topology({
         />
         <rect x={view.x} y={view.y} width={view.w} height={view.h} fill="url(#grid)" pointerEvents="none" />
         {cables.map((cable) => (
-          <path
-            key={cable.id}
-            d={cable.d}
-            fill="none"
-            stroke={cable.color}
-            strokeWidth={cable.width}
-            strokeDasharray={cable.dash}
-            pointerEvents="none"
-          />
+          <g key={cable.id}>
+            <path
+              d={cable.d}
+              fill="none"
+              stroke="transparent"
+              strokeWidth={14}
+              style={{ cursor: busy ? "wait" : "pointer" }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (!busy) onRemove(cable.id);
+              }}
+            >
+              <title>Remove this cable</title>
+            </path>
+            <path
+              d={cable.d}
+              fill="none"
+              stroke={cable.color}
+              strokeWidth={cable.width}
+              strokeDasharray={cable.dash}
+              pointerEvents="none"
+            />
+          </g>
         ))}
         {lab.devices.map((device) => {
           const at = pos[device.name] ?? { x: device.x, y: device.y };
@@ -364,7 +383,7 @@ export function Topology({
                       onSelect(device.name);
                       onPort(device.name, iface.name);
                     }}
-                    style={{ cursor: "crosshair" }}
+                    style={{ cursor: busy ? "wait" : "crosshair" }}
                   >
                     <text x="16" y="18" fill="#f4ecda" fontSize="15" fontFamily="ui-monospace, monospace">
                       {short(iface.name)}
