@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Repo wrapper. ensure-running installs the real entrypoint into the data venv.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+DATA="${DRYRUN_HOME:-$HOME/.local/share/dryrun-lab}"
+if [[ -x "$DATA/venv/bin/dryrun-lab" ]]; then
+  export DRYRUN_REPO="${DRYRUN_REPO:-$ROOT}"
+  export DRYRUN_HOME="$DATA"
+  exec "$DATA/venv/bin/dryrun-lab" "$@"
+fi
+echo "Dry Run Lab is not installed yet. Run ./ensure-running" >&2
+exit 1

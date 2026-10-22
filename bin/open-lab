@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# Open the lab in a browser window. Opt-in from ensure-running via --open.
+# Reuses a window that is already showing the lab. Never accepts terms.
+set -euo pipefail
+
+URL="${1:-http://127.0.0.1:8742}"
+DATA="${DRYRUN_HOME:-$HOME/.local/share/dryrun-lab}"
+PROFILE="$DATA/browser-profile"
+
+if [[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+  printf '%s\n' "$URL"
+  exit 0
+fi
+
+launch() {
+  nohup "$@" >/dev/null 2>&1 &
+}
+
+# A browser that is already running can ignore --start-maximized.
+# Ask the window manager once the lab window exists.
+maximize_lab_window() {
+  if ! command -v xdotool >/dev/null 2>&1; then
+    return 0
+  fi
+  local n id sw=0 sh=0
+  if command -v xdpyinfo >/dev/null 2>&1; then
+    read -r sw sh < <(xdpyinfo 2>/dev/null | awk '/dimensions:/ {split($2, a, "x"); print a[1], a[2]; exit}')
+  fi
+  if [[ "$sw" -le 0 || "$sh" -le 0 ]]; then
+    return 0
+  fi
+  # A new window can appear after the browser attaches to a running session.
+  for ((n = 0; n < 6; n++)); do
+    while read -r id; do
+      [[ -z "$id" ]] && continue
+      xdotool windowactivate "$id" >/dev/null 2>&1 || true
+      xdotool windowmove "$id" 0 0 >/dev/null 2>&1 || true
+      xdotool windowsize "$id" "$sw" "$sh" >/dev/null 2>&1 || true
+    done < <(xdotool search --name "Dry Run Lab" 2>/dev/null || true)
+    sleep 0.35
+  done
+  return 0
+}
+
+# Reuse a window that is already showing the lab. Do not open another.
+if command -v xdotool >/dev/null 2>&1; then
+  existing="$(xdotool search --name "Dry Run Lab" 2>/dev/null | head -n 1 || true)"
+  if [[ -n "${existing}" ]]; then
+    maximize_lab_window
+    exit 0
+  fi
+fi
+
+mkdir -p "$PROFILE"
+
+browser=""
+for candidate in google-chrome google-chrome-stable chromium chromium-browser microsoft-edge; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    browser="$candidate"
+    break
+  fi
+done
+
+if [[ -n "$browser" ]]; then
+  # Dedicated profile plus these flags skip first-run dialogs.
+  # Nothing here clicks, accepts, or agrees to any terms.
+  launch "$browser" \
+    --user-data-dir="$PROFILE" \
+    --no-first-run \
+    --no-default-browser-check \
+    --disable-sync \
+    --start-maximized \
+    "$URL"
+  sleep 1
+  maximize_lab_window
+  exit 0
+fi
+
+if command -v firefox >/dev/null 2>&1; then
+  mkdir -p "$PROFILE"
+  # Hide the welcome screen. Do not bypass or accept a policy dialog.
+  printf '%s\n' \
+    'user_pref("browser.aboutwelcome.enabled", false);' \
+    'user_pref("browser.shell.checkDefaultBrowser", false);' \
+    >"$PROFILE/user.js"
+  launch firefox --profile "$PROFILE" --no-remote --new-window "$URL"
+  maximize_lab_window
+  exit 0
+fi
+
+if command -v xdg-open >/dev/null 2>&1; then
+  launch xdg-open "$URL"
+  maximize_lab_window
+  exit 0
+fi
+
+printf '%s\n' "$URL"
+exit 0

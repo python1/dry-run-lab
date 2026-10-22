@@ -1,0 +1,365 @@
+#!/usr/bin/env bash
+# Idempotent starter. Safe to re-run. No systemd. Loopback only.
+set -euo pipefail
+
+OPEN=0
+for arg in "$@"; do
+  case "$arg" in
+    --open) OPEN=1 ;;
+    -h|--help)
+      cat <<'EOF'
+Usage: ./ensure-running [--open]
+
+Start Dry Run Lab on 127.0.0.1:8742 if it is not already running.
+When a lab is saved and nothing has been computed yet, reload that
+lab and recompute once the analysis engine is up. Safe to run again.
+No systemd.
+
+Run this after a computer restart and after an Update Bot's Computer
+wipe. A virtualenv left in the home folder is recreated when its
+Python interpreter is missing or no longer matches.
+
+--open    Open the lab in a browser. Off unless you pass this flag.
+          The browser uses a dedicated profile and is not asked to
+          accept anyone's terms.
+EOF
+      exit 0
+      ;;
+    *)
+      printf 'Unknown argument: %s\n' "$arg" >&2
+      exit 2
+      ;;
+  esac
+done
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+export DRYRUN_REPO="$ROOT"
+export DRYRUN_HOME="${DRYRUN_HOME:-$HOME/.local/share/dryrun-lab}"
+DATA="$DRYRUN_HOME"
+mkdir -p "$DATA"
+LOG="$DATA/ensure.log"
+touch "$LOG"
+
+say() { printf '%s\n' "$*"; }
+log() { printf '%s\n' "$*" >>"$LOG"; }
+
+stamp="$(PYTHONPATH="$ROOT/src" python3 -c 'from dryrun_lab.version import version; print(version())' 2>/dev/null || true)"
+stamp="${stamp:-unknown}"
+log "dryrun-lab ${stamp}"
+
+as_root() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+port_open() {
+  python3 - "$1" <<'PY'
+import socket, sys
+s = socket.socket()
+s.settimeout(0.4)
+try:
+    sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)
+finally:
+    s.close()
+PY
+}
+
+wait_port() {
+  local port="$1" tries="$2"
+  local i
+  for ((i = 0; i < tries; i++)); do
+    if port_open "$port"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+java_major() {
+  java -version 2>&1 | sed -n 's/.* version "\([0-9][0-9]*\).*/\1/p' | head -1
+}
+
+summarize_apt() {
+  local file="$1"
+  local added replaced summary
+  added="$(grep -c 'Adding debian:' "$file" || true)"
+  replaced="$(grep -c 'Replacing debian:' "$file" || true)"
+  awk '
+    { gsub(/\r/, "") }
+    $0 ~ /^(Adding|Replacing) debian:/ { next }
+    $0 ~ /Reading database/ { next }
+    $0 ~ /needrestart/ { next }
+    $0 ~ /Pending kernel upgrade/ { next }
+    $0 ~ /Restarting services/ { next }
+    $0 ~ /No containers need to be restarted/ { next }
+    $0 ~ /No user sessions are running outdated binaries/ { next }
+    $0 ~ /No VM guests are running outdated hypervisor/ { next }
+    $0 ~ /Service restarts being deferred/ { next }
+    $0 ~ /Failed to retrieve available kernel versions\./ { next }
+    $0 ~ /Failed to check for processor microcode upgrades\./ { next }
+    $0 ~ /No services need to be restarted\./ { next }
+    $0 ~ /^[[:space:]]*$/ { next }
+    { print }
+  ' "$file" >>"$LOG" || true
+  summary=""
+  if [[ "${added}" -gt 0 && "${replaced}" -gt 0 ]]; then
+    summary="CA certificates: ${added} added, ${replaced} replaced"
+  elif [[ "${added}" -gt 0 ]]; then
+    summary="CA certificates: ${added} added"
+  elif [[ "${replaced}" -gt 0 ]]; then
+    summary="CA certificates: ${replaced} replaced"
+  fi
+  if [[ -n "${summary}" ]]; then
+    log "${summary}"
+  fi
+}
+
+apt_logged() {
+  local tmp status
+  tmp="$(mktemp)"
+  set +e
+  "$@" >"$tmp" 2>&1
+  status=$?
+  set -e
+  summarize_apt "$tmp"
+  rm -f "$tmp"
+  return "$status"
+}
+
+reap_pid() {
+  local file="$1"
+  local pid
+  [[ -f "$file" ]] || return 0
+  pid="$(tr -cd '0-9' <"$file" || true)"
+  if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+    log "removing stale pid file $file"
+    rm -f "$file"
+  fi
+}
+
+install_packages() {
+  local need=()
+  command -v curl >/dev/null 2>&1 || need+=(curl)
+  if ! command -v java >/dev/null 2>&1; then
+    need+=(openjdk-21-jre-headless)
+  else
+    local major
+    major="$(java_major || true)"
+    if [[ -z "${major}" || "${major}" -lt 21 ]]; then
+      need+=(openjdk-21-jre-headless)
+    fi
+  fi
+  python3 -c "import ensurepip" >/dev/null 2>&1 || need+=(python3-venv)
+  [[ -f /etc/ssl/certs/ca-certificates.crt ]] || need+=(ca-certificates)
+  if [[ ${#need[@]} -eq 0 ]]; then
+    return 0
+  fi
+  log "apt install ${need[*]}"
+  apt_logged as_root apt-get update -qq
+  apt_logged as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${need[@]}" ca-certificates
+}
+
+write_runner() {
+  cat >"$DATA/batfish/run.sh" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$DATA/batfish"
+exec java -Xms256m -Xmx2g \\
+  -Dlog4j.configurationFile="$DATA/batfish/log4j2.yaml" \\
+  -cp "$DATA/batfish/allinone-bundle.jar" \\
+  org.batfish.allinone.Main \\
+  -runclient false \\
+  -loglevel warn \\
+  -coordinatorargs "-templatedirs $DATA/batfish/questions -containerslocation $DATA/batfish/data -workbindhost 127.0.0.1" \\
+  -batfishargs "-servicebindhost 127.0.0.1"
+EOF
+  chmod +x "$DATA/batfish/run.sh"
+}
+
+start_java() {
+  reap_pid "$DATA/batfish.pid"
+  if port_open 9996; then
+    log "engine already listening on 127.0.0.1:9996"
+    return 0
+  fi
+  write_runner
+  log "starting java engine"
+  nohup "$DATA/batfish/run.sh" >>"$DATA/batfish.log" 2>&1 &
+  echo $! >"$DATA/batfish.pid"
+  if wait_port 9996 90; then
+    return 0
+  fi
+  log "java engine did not open 9996"
+  tail -n 40 "$DATA/batfish.log" >>"$LOG" || true
+  return 1
+}
+
+start_docker() {
+  local image="batfish/allinone:v2026.08.27"
+  log "falling back to the official ${image} image"
+  if ! command -v docker >/dev/null 2>&1; then
+    apt_logged as_root apt-get update -qq
+    apt_logged as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io
+  fi
+  if ! as_root docker info >>"$LOG" 2>&1; then
+    nohup as_root dockerd --host=unix:///var/run/docker.sock --iptables=false >>"$DATA/dockerd.log" 2>&1 &
+    local i
+    for ((i = 0; i < 40; i++)); do
+      as_root docker info >>"$LOG" 2>&1 && break
+      sleep 1
+    done
+  fi
+  as_root docker rm -f dryrun-batfish >>"$LOG" 2>&1 || true
+  as_root docker run -d --name dryrun-batfish --network host --memory 3g \
+    --entrypoint java "$image" \
+    -Xms256m -Xmx2g \
+    -Dlog4j.configurationFile=log4j2.yaml \
+    -cp allinone-bundle.jar \
+    org.batfish.allinone.Main \
+    -runclient false -loglevel warn \
+    -coordinatorargs "-templatedirs questions -containerslocation /data/containers -workbindhost 127.0.0.1" \
+    -batfishargs "-servicebindhost 127.0.0.1" >>"$LOG" 2>&1
+  wait_port 9996 90
+}
+
+python_home() {
+  dirname "$(readlink -f "$(command -v python3)")"
+}
+
+venv_matches_python() {
+  local venv="$1"
+  local cfg="$venv/pyvenv.cfg"
+  local vhome
+  [[ -x "$venv/bin/python" ]] || return 1
+  "$venv/bin/python" -c "import sys" >/dev/null 2>&1 || return 1
+  [[ -f "$cfg" ]] || return 1
+  vhome="$(sed -n 's/^home[[:space:]]*=[[:space:]]*//p' "$cfg" | head -1)"
+  [[ -n "$vhome" && "$vhome" == "$(python_home)" ]]
+}
+
+requirements_hash() {
+  ROOT="$ROOT" DATA="$DATA" python3 - <<'PY'
+import hashlib
+import os
+from pathlib import Path
+
+root = Path(os.environ["ROOT"])
+data = Path(os.environ["DATA"])
+digest = hashlib.sha256()
+digest.update((root / "pyproject.toml").read_bytes())
+wheels = sorted((data / "batfish").glob("pybatfish-*.whl"))
+if not wheels:
+    raise SystemExit("no pybatfish wheel")
+for wheel in wheels:
+    digest.update(wheel.name.encode())
+    digest.update(str(wheel.stat().st_size).encode())
+print(digest.hexdigest())
+PY
+}
+
+install_python() {
+  local venv="$DATA/venv"
+  if ! venv_matches_python "$venv"; then
+    if [[ -d "$venv" ]]; then
+      say "Python interpreter changed or is missing; recreating the virtualenv."
+    fi
+    rm -rf "$venv"
+    python3 -m venv "$venv"
+    rm -f "$DATA/venv.stamp"
+  fi
+  shopt -s nullglob
+  local wheels=("$DATA"/batfish/pybatfish-*.whl)
+  shopt -u nullglob
+  if [[ ${#wheels[@]} -eq 0 ]]; then
+    log "matching client wheel was not extracted next to the jar"
+    return 1
+  fi
+  local want have=""
+  want="$(requirements_hash)"
+  if [[ -f "$DATA/venv.stamp" ]]; then
+    have="$(<"$DATA/venv.stamp")"
+  fi
+  if [[ "$have" == "$want" ]] && "$venv/bin/python" -c "import dryrun_lab, pybatfish, fastapi" >/dev/null 2>&1; then
+    log "venv matches requirements hash ${want}; not contacting the package index"
+    return 0
+  fi
+  say "Installing Python packages…"
+  "$venv/bin/pip" install -q "${wheels[@]}" >>"$LOG" 2>&1
+  "$venv/bin/pip" install -q -e "$ROOT" >>"$LOG" 2>&1
+  printf '%s\n' "$want" >"$DATA/venv.stamp"
+}
+
+lab_healthy() {
+  local code
+  code="$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "http://127.0.0.1:8742/api/health" 2>/dev/null || true)"
+  [[ "$code" == "200" ]]
+}
+
+start_server() {
+  reap_pid "$DATA/server.pid"
+  if lab_healthy; then
+    log "lab already healthy"
+    return 0
+  fi
+  log "starting lab server"
+  nohup "$DATA/venv/bin/python" -m dryrun_lab.server >>"$DATA/server.log" 2>&1 &
+  echo $! >"$DATA/server.pid"
+  local i
+  for ((i = 0; i < 90; i++)); do
+    if lab_healthy; then
+      return 0
+    fi
+    sleep 1
+  done
+  log "lab server did not become healthy"
+  tail -n 40 "$DATA/server.log" >>"$LOG" || true
+  return 1
+}
+
+reload_saved_lab() {
+  local lab="$DATA/lab.json"
+  if [[ ! -s "$lab" ]]; then
+    log "no saved lab to recompute"
+    return 0
+  fi
+  if ! python3 - "$lab" <<'PY'
+import json
+import sys
+
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+raise SystemExit(0 if doc.get("devices") else 1)
+PY
+  then
+    log "saved lab has no devices"
+    return 0
+  fi
+  local computed health
+  health="$(curl -s --max-time 5 "http://127.0.0.1:8742/api/health" 2>/dev/null || true)"
+  computed="$(printf '%s' "$health" | python3 -c 'import json,sys; print("yes" if json.load(sys.stdin).get("computed") else "no")')"
+  if [[ "$computed" == "yes" ]]; then
+    log "saved lab is already computed"
+    return 0
+  fi
+  log "recomputing saved lab"
+  curl -fsS -X POST "http://127.0.0.1:8742/api/recompute" >>"$LOG" 2>&1
+}
+
+install_packages
+say "Preparing Dry Run Lab…"
+python3 "$ROOT/tools/fetch_batfish.py" "$DATA/batfish" 2>&1 | tee -a "$LOG"
+if ! start_java; then
+  start_docker
+fi
+install_python
+start_server
+reload_saved_lab
+say "Dry Run Lab"
+say "http://127.0.0.1:8742"
+say "CLI: $DATA/venv/bin/dryrun-lab"
+if [[ "$OPEN" == "1" ]]; then
+  "$ROOT/bin/open-lab" "http://127.0.0.1:8742" || true
+fi

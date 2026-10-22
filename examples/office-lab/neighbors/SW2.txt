@@ -1,0 +1,6 @@
+SW2#show lldp neighbors detail
+------------------------------------------------
+Local Intf: Gi0/1
+Chassis id: 0011.2233.4402
+Port id: Gi1/0/2
+System Name: SW1

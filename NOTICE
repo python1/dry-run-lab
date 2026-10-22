@@ -1,0 +1,30 @@
+Dry Run Lab
+Copyright 2026 Paul Charydczak
+
+This product includes Batfish from The Batfish Open Source Project.
+
+Batfish
+Copyright 2018 The Batfish Open Source Project
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+The upstream Batfish source tree does not ship a separate NOTICE file.
+Source file headers carry "Copyright 2018 The Batfish Open Source Project"
+and the project README states that Batfish is released under the Apache
+License, Version 2.0. This NOTICE records that attribution.
+
+The published all-in-one jar also carries META-INF/NOTICE for the shaded
+Jackson JSON processor (Copyright 2007-, Tatu Saloranta), licensed under
+the Apache License, Version 2.0. That notice ships inside the jar, which
+this repository downloads at runtime from the official batfish/allinone
+image and does not vendor.

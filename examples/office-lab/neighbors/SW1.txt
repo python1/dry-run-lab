@@ -1,0 +1,11 @@
+SW1#show cdp neighbors
+Capability Codes: R - Router, S - Switch, I - IGMP
+
+Device ID        Local Intrfce     Holdtme    Capability  Platform  Port ID
+R1               Gig 1/0/1         168              R     ISR       Gig 0/0
+SW3              Gig 1/0/3         154              S I   C2960     Gig 0/1
+
+SW1#show lldp neighbors detail
+Local Intf: Gi1/0/2
+System Name: SW2
+Port id: Gi0/1

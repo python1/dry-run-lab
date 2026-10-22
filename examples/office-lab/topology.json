@@ -1,0 +1,34 @@
+{
+  "name": "office-lab",
+  "summary": "Synthetic office: one router with router-on-a-stick inter-VLAN routing, three switches, one extended ACL, static routes, and OSPF across a single point-to-point link.",
+  "devices": [
+    {
+      "file": "configs/R1.cfg",
+      "role": "router",
+      "x": 430,
+      "y": 36,
+      "neighbors": "neighbors/R1.txt"
+    },
+    {
+      "file": "configs/SW1.cfg",
+      "role": "switch",
+      "x": 430,
+      "y": 248,
+      "neighbors": "neighbors/SW1.txt"
+    },
+    {
+      "file": "configs/SW2.cfg",
+      "role": "switch",
+      "x": 150,
+      "y": 468,
+      "neighbors": "neighbors/SW2.txt"
+    },
+    {
+      "file": "configs/SW3.cfg",
+      "role": "switch",
+      "x": 710,
+      "y": 468,
+      "neighbors": "neighbors/SW3.txt"
+    }
+  ]
+}
