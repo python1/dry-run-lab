@@ -12,16 +12,29 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from dryrun_lab.acls import added_aces, numbered_config, parse_acls, sequence_of, shadow_sentence, split_sequence
+from dryrun_lab.acls import (
+    ace_at_index,
+    added_aces,
+    numbered_config,
+    parse_acls,
+    sequence_of,
+    shadow_sentence,
+    split_sequence,
+)
 from dryrun_lab.configedit import apply_config_lines, prompt_for
 from dryrun_lab.configparse import canonical_interface, parse_config
 from dryrun_lab.constants import COMPUTED_TAG, ENGINE_HOST, ENGINE_PORT
 from dryrun_lab.facts import annotate_warnings
 from dryrun_lab.hosts import host_document, host_limits
+from dryrun_lab.infer import endpoint_key
 from dryrun_lab.l2path import layer2_note
 from dryrun_lab.paths import data_home
 from dryrun_lab.probes import Probe, probes_for_acl, probes_for_lab
 from dryrun_lab.showfmt import (
+    assumed_line,
+    assumed_lines_for_route_changes,
+    assumed_lines_for_routes,
+    assumed_lines_for_trace,
     command_help,
     format_change_diff,
     format_ping,
@@ -36,6 +49,7 @@ from dryrun_lab.showfmt import (
     show_unsimulated,
     show_vlan_brief,
     vlan_names,
+    with_assumed,
 )
 from dryrun_lab.store import Lab, Link, push_config
 
@@ -54,6 +68,7 @@ class ShowResult:
     text: str
     prompt: str
     changed: bool = False
+    ok: bool = True
 
 
 class Engine:
@@ -69,6 +84,7 @@ class Engine:
         self._routes: dict[str, list[dict[str, Any]]] = {}
         self._vlans: dict[str, list[dict[str, Any]]] = {}
         self._drafts: dict[str, list[str]] = {}
+        self._reach_assumed: dict[str, list[str]] = {}
         self._ready = False
 
     def healthy(self) -> bool:
@@ -147,16 +163,18 @@ class Engine:
         texts: list[str] = []
         prompt = f"{device.name}#"
         changed = False
+        ok = True
         for piece in pieces:
-            prompt, text, piece_changed = self._dispatch(lab, device, piece)
+            prompt, text, piece_changed, piece_ok = self._dispatch(lab, device, piece)
             changed = changed or piece_changed
+            ok = ok and piece_ok
             if text:
                 texts.append(text)
         if not texts:
             texts.append(_wrap(device.name, command, ""))
-        return ShowResult("\n".join(texts), prompt, changed)
+        return ShowResult("\n".join(texts), prompt, changed, ok)
 
-    def _dispatch(self, lab: Lab, device: Any, command: str) -> tuple[str, str, bool]:
+    def _dispatch(self, lab: Lab, device: Any, command: str) -> tuple[str, str, bool, bool]:
         key = device.name.lower()
         folded = " ".join(command.strip().split()).lower()
         draft = self._drafts.get(key)
@@ -168,38 +186,40 @@ class Engine:
             text = _wrap(
                 device.name,
                 command,
-                "Enter configuration commands, one per line. End with END.\n",
+                "Enter configuration commands, one per line. End with CNTL/Z.\n",
+                prompt=enable,
+                computed=False,
             )
-            return f"{device.name}(config)#", text, False
+            return f"{device.name}(config)#", text, False, True
         if folded in {"revert", "rollback"}:
-            return enable, self._revert(lab, device, command), True
+            return enable, self._revert(lab, device, command), True, True
         flow = parse_flow(command)
         if flow is not None:
             self._ensure_ready(lab)
             body, drop = self._flow_body(lab, device.name, flow)
             formatter = format_ping if flow["kind"] == "ping" else format_traceroute
-            text = _wrap(
-                device.name,
-                command,
+            shown = with_assumed(
                 formatter(str(flow["dst"]), flow["src"], flow["ingress"], body, drop),
+                assumed_lines_for_trace(body, _assumed_links(lab)),
             )
-            return enable, text, False
+            text = _wrap(device.name, command, shown)
+            return enable, text, False, True
         kind = normalize_command(command)
         if kind is None:
             if "|" in command:
                 detail = "% Pipes are not simulated in this version.\n\n" + command_help()
             else:
                 detail = "% Unrecognized command.\n\n" + command_help()
-            return enable, _wrap(device.name, command, detail), False
+            return enable, _wrap(device.name, command, detail), False, False
         if kind == "running-config":
             rows = [row for row in lab.warnings if row.get("device") == device.name]
-            return enable, _wrap(device.name, command, show_running_config(device.config, rows)), False
+            return enable, _wrap(device.name, command, show_running_config(device.config, rows)), False, True
         if kind == "warnings":
             rows = [row for row in lab.warnings if row.get("device") == device.name]
-            return enable, _wrap(device.name, command, show_unsimulated(device.name, rows)), False
+            return enable, _wrap(device.name, command, show_unsimulated(device.name, rows)), False, True
         if kind == "acl":
             rows = self._interfaces.get(key, [])
-            return enable, _wrap(device.name, command, show_access_lists(device.config, rows)), False
+            return enable, _wrap(device.name, command, show_access_lists(device.config, rows)), False, True
         self._ensure_ready(lab)
         if kind == "interfaces":
             body = show_ip_interface_brief(self._interfaces.get(key, []))
@@ -208,8 +228,9 @@ class Engine:
         elif kind == "trunk":
             body = show_interfaces_trunk(self._interfaces.get(key, []))
         else:
-            body = show_ip_route(self._routes.get(key, []))
-        return enable, _wrap(device.name, command, body), False
+            rows = self._routes.get(key, [])
+            body = with_assumed(show_ip_route(rows), assumed_lines_for_routes(device.name, rows, _assumed_links(lab)))
+        return enable, _wrap(device.name, command, body), False, True
 
     def _client(self) -> Any:
         if self._session is not None:
@@ -231,29 +252,62 @@ class Engine:
             raise EngineUnavailable(lab.engine_error)
         raise EngineUnavailable("Nothing has been computed yet.")
 
-    def _config_line(self, lab: Lab, device: Any, command: str, draft: list[str]) -> tuple[str, str, bool]:
+    def _config_line(self, lab: Lab, device: Any, command: str, draft: list[str]) -> tuple[str, str, bool, bool]:
         key = device.name.lower()
         folded = " ".join(command.strip().split()).lower()
         enable = f"{device.name}#"
+        current = prompt_for(device.name, draft)
+        if "|" in command:
+            detail = "% Pipes are not simulated in this version.\n\n" + command_help()
+            return current, _wrap(device.name, command, detail, prompt=current), False, False
         if folded == "abort":
             self._drafts.pop(key, None)
-            return enable, _wrap(device.name, command, "Configuration aborted. Nothing was applied.\n"), False
+            return (
+                enable,
+                _wrap(
+                    device.name,
+                    command,
+                    "Configuration aborted. Nothing was applied.\n",
+                    prompt=current,
+                    computed=False,
+                ),
+                False,
+                True,
+            )
         if folded == "end" or (folded == "exit" and _config_depth(draft) == 1):
             lines = list(draft)
             self._drafts.pop(key, None)
             body = self._apply(lab, device, lines)
-            return enable, _wrap(device.name, command, body), True
+            computed = not body.startswith("No configuration changes")
+            return enable, _wrap(device.name, command, body, prompt=current, computed=computed), True, True
         if folded in {"revert", "rollback"}:
-            return prompt_for(device.name, draft), _wrap(
-                device.name,
-                command,
-                "Leave configuration mode before revert.\n",
-            ), False
+            return (
+                current,
+                _wrap(
+                    device.name,
+                    command,
+                    "Leave configuration mode before revert.\n",
+                    prompt=current,
+                    computed=False,
+                ),
+                False,
+                True,
+            )
         if folded == "exit":
             draft.append("exit")
-            return prompt_for(device.name, draft), _wrap(device.name, command, ""), False
+            return (
+                prompt_for(device.name, draft),
+                _wrap(device.name, command, "", prompt=current, computed=False),
+                False,
+                True,
+            )
         draft.append(command.strip())
-        return prompt_for(device.name, draft), _wrap(device.name, command, ""), False
+        return (
+            prompt_for(device.name, draft),
+            _wrap(device.name, command, "", prompt=current, computed=False),
+            False,
+            True,
+        )
 
     def _revert(self, lab: Lab, device: Any, command: str) -> str:
         history = device.config_history
@@ -292,6 +346,8 @@ class Engine:
 
         self._ensure_ready(lab)
         before_config = device.config
+        assumed = _assumed_links(lab)
+        self._reach_assumed = {}
         probes = _unique_probes(probes_for_lab(lab) + probes_for_acl(lab, device.name, edit_lines or []))
         before_routes = _snap_routes(self._routes)
         before_warnings = [dict(row) for row in lab.warnings]
@@ -315,10 +371,21 @@ class Engine:
             after_reach.setdefault(label, summary)
         missing = {label: "not present" for label in after_reach if label not in before_reach}
         before_reach.update(missing)
-        notices = _notices_for_added(device.name, before_config, updated, lab.warnings)
+        _attribute_unreachable(device.name, before_config, updated, before_warnings, lab.warnings)
+        notices = _notices_for_added(
+            device.name, before_config, updated, lab.warnings, before_warnings
+        )
+        after_routes = _snap_routes(self._routes)
+        assumed_after = _assumed_links(lab)
+        notes = _assumed_notes(
+            assumed,
+            assumed_after,
+            assumed_lines_for_route_changes(before_routes, after_routes, assumed + assumed_after),
+            _changed_reach_notes(before_reach, after_reach, self._reach_assumed),
+        )
         return format_change_diff(
             before_routes,
-            _snap_routes(self._routes),
+            after_routes,
             before_warnings,
             [dict(row) for row in lab.warnings],
             before_reach,
@@ -326,6 +393,7 @@ class Engine:
             applied,
             headline=headline,
             notices=notices,
+            assumed=notes,
         )
 
     def _flow_body(self, lab: Lab, device_name: str, flow: dict[str, str | None]) -> tuple[dict[str, Any], str | None]:
@@ -341,6 +409,11 @@ class Engine:
 
     def _reach_summary(self, lab: Lab, probe: Probe) -> str:
         trace = self._trace(probe.device, probe.dst, probe.src, probe.ingress)
+        _rename_steps(lab, trace)
+        bucket = self._reach_assumed.setdefault(probe.label(), [])
+        for line in assumed_lines_for_trace(trace, _assumed_links(lab)):
+            if line not in bucket:
+                bucket.append(line)
         summary = str(trace.get("disposition") or trace.get("error") or "none")
         if _denied(trace):
             drop = self._drop_line(lab, probe.device, probe.src, probe.dst)
@@ -404,11 +477,20 @@ class Engine:
             if hostname and hostname.lower() != device.name.lower():
                 names.append(hostname)
             for acl in parse_acls(device.config):
+                text_counts: dict[str, int] = {}
                 for ace in acl.aces:
+                    text_counts[ace.text.lower()] = text_counts.get(ace.text.lower(), 0) + 1
+                for ace in acl.aces:
+                    unique = text_counts[ace.text.lower()] == 1
                     matched = [
                         row
                         for row in rows
-                        if any(_unreachable_matches(row, name, acl.name, ace.text) for name in names)
+                        if any(
+                            _unreachable_matches(
+                                row, name, acl.name, ace.text, ace.seq, unique=unique
+                            )
+                            for name in names
+                        )
                     ]
                     if questioned and not matched:
                         continue
@@ -450,15 +532,18 @@ class Engine:
         rows = _records(frame)
         if not rows:
             return None
-        rows.sort(key=lambda row: int(row.get("Line_Index") or 0))
+        rows.sort(key=_matching_line_order)
         top = rows[0]
         acl = str(top.get("Filter") or "acl")
         reported = str(top.get("Line") or "").strip()
         sequence, ace = split_sequence(reported)
         device = lab.device(device_name)
         if sequence is None and device is not None:
-            sequence = sequence_of(device.config, acl, reported)
-            ace = reported
+            located = ace_at_index(device.config, acl, _as_int(top.get("Line_Index")))
+            if located is not None and located[1].lower() == ace.lower():
+                sequence = located[0]
+            else:
+                sequence = sequence_of(device.config, acl, reported)
         where = f"sequence {sequence}: " if sequence is not None else ""
         return f"Dropped by ACL {acl}\n  {where}{ace}\n"
 
@@ -486,11 +571,7 @@ class Engine:
             (configs / f"{safe}.cfg").write_text(numbered_config(device.config), encoding="utf-8")
         if not wrote_host and hosts.exists():
             shutil.rmtree(hosts)
-        edges = []
-        for link in lab.links:
-            if link.status != "confirmed":
-                continue
-            edges.append(_edge(link))
+        edges = [_edge(link) for link in _layer1_links(lab)]
         topo_dir = root / "batfish"
         topo_dir.mkdir()
         (topo_dir / "layer1_topology.json").write_text(
@@ -500,8 +581,19 @@ class Engine:
         return root
 
 
-def _wrap(device: str, command: str, body: str) -> str:
-    return f"{device}# {command.strip()}\n{COMPUTED_TAG}\n\n{body}"
+def _wrap(
+    device: str,
+    command: str,
+    body: str,
+    *,
+    prompt: str | None = None,
+    computed: bool = True,
+) -> str:
+    shown = prompt or f"{device}#"
+    head = f"{shown} {command.strip()}\n"
+    if not computed:
+        return head + body
+    return f"{head}{COMPUTED_TAG}\n\n{body}"
 
 
 def _safe_name(name: str) -> str:
@@ -539,6 +631,78 @@ def _mark_link_state(lab: Lab, interfaces: dict[str, list[dict[str, Any]]]) -> N
             if parsed is not None and parsed.shutdown:
                 down = True
         link.down = down
+
+
+def _layer1_links(lab: Lab) -> list[Link]:
+    """Edges written into the layer-1 file.
+
+    Confirmed cables are edges. A suggested /30 or /31 between two physical
+    interfaces is also an edge, unless `unconfirm` withdrew it. Suggested
+    trunks and host cables are not. Writing the point-to-point edge keeps
+    that adjacency when some other cable is confirmed. An empty file makes
+    the engine hub every physical interface together, which is a different
+    path and is not a reading of the suggestion list.
+    """
+    withdrawn = set(lab.withdrawn)
+    chosen: list[Link] = []
+    seen: set[str] = set()
+    for link in lab.links:
+        key = endpoint_key(link.a_device, link.a_interface, link.b_device, link.b_interface)
+        if key in seen:
+            continue
+        if link.status == "confirmed" or (_point_to_point_subnet(link) and key not in withdrawn):
+            seen.add(key)
+            chosen.append(link)
+    return chosen
+
+
+def _assumed_links(lab: Lab) -> list[Link]:
+    """Suggested /30 or /31 edges written into layer 1. Confirmed cables are not."""
+    return [link for link in _layer1_links(lab) if link.status != "confirmed"]
+
+
+def _changed_reach_notes(
+    before: dict[str, str],
+    after: dict[str, str],
+    used: dict[str, list[str]],
+) -> list[str]:
+    notes: list[str] = []
+    for label in set(before) | set(after):
+        if before.get(label) == after.get(label):
+            continue
+        for line in used.get(label, []):
+            if line not in notes:
+                notes.append(line)
+    return notes
+
+
+def _assumed_notes(
+    before_links: list[Link],
+    after_links: list[Link],
+    route_notes: list[str],
+    reach_notes: list[str],
+) -> list[str]:
+    wanted = set(route_notes) | set(reach_notes)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for link in [*before_links, *after_links]:
+        line = assumed_line(link)
+        if line in wanted and line not in seen:
+            seen.add(line)
+            ordered.append(line)
+    for line in [*route_notes, *reach_notes]:
+        if line not in seen and line in wanted:
+            seen.add(line)
+            ordered.append(line)
+    return ordered
+
+
+def _point_to_point_subnet(link: Link) -> bool:
+    sources = {part for part in link.source.split("+") if part}
+    if "subnet" not in sources:
+        return False
+    match = re.search(r"/(\d+)\b", link.reason)
+    return bool(match and int(match.group(1)) >= 30)
 
 
 def _edge(link: Link) -> dict[str, Any]:
@@ -744,25 +908,87 @@ def _config_depth(commands: list[str]) -> int:
     return 2 if nested else 1
 
 
+def _ace_key(row: dict[str, Any]) -> tuple[str, Any, str]:
+    return (
+        str(row.get("acl") or "").lower(),
+        row.get("sequence"),
+        str(row.get("ace") or "").lower(),
+    )
+
+
+def _as_added_line(text: str) -> str:
+    prefix = "Line at sequence"
+    if text.startswith(prefix):
+        return "Line added at sequence" + text[len(prefix) :]
+    return text
+
+
+def _attribute_unreachable(
+    device_name: str,
+    before: str,
+    after: str,
+    before_warnings: list[dict[str, Any]],
+    warnings: list[dict[str, Any]],
+) -> None:
+    """Use 'added' only for an unreachable line this edit introduced.
+
+    A line that was already in the config is not described as added. A
+    warning already stored for the same line keeps its wording, so a later
+    unrelated edit does not rewrite it.
+    """
+    added = {(acl.name.lower(), ace.seq, ace.text.lower()) for acl, ace in added_aces(before, after)}
+    previous: dict[tuple[str, Any, str], str] = {}
+    for row in before_warnings:
+        if str(row.get("kind") or "") != "unreachable":
+            continue
+        if str(row.get("device") or "").lower() != device_name.lower():
+            continue
+        previous[_ace_key(row)] = str(row.get("text") or "")
+    for row in warnings:
+        if str(row.get("kind") or "") != "unreachable":
+            continue
+        if str(row.get("device") or "").lower() != device_name.lower():
+            continue
+        key = _ace_key(row)
+        if key in previous:
+            row["text"] = previous[key]
+            continue
+        if key in added:
+            row["text"] = _as_added_line(str(row.get("text") or ""))
+
+
 def _notices_for_added(
     device_name: str,
     before: str,
     after: str,
     warnings: list[dict[str, Any]],
+    before_warnings: list[dict[str, Any]] | None = None,
 ) -> list[str]:
-    """Banner lines for unreachable ACL entries this edit introduced."""
+    """Banner lines for unreachable ACL entries this edit caused.
+
+    That is a line this edit introduced, or a line already in the config
+    that this edit caused to stop matching. Warnings that were already
+    present stay out of the banner.
+    """
     added = {(acl.name.lower(), ace.seq, ace.text.lower()) for acl, ace in added_aces(before, after)}
-    if not added:
-        return []
+    already: set[tuple[str, Any, str]] = set()
+    for row in before_warnings or []:
+        if str(row.get("kind") or "") != "unreachable":
+            continue
+        if str(row.get("device") or "").lower() != device_name.lower():
+            continue
+        already.add(_ace_key(row))
     notices: list[str] = []
     for row in warnings:
         if str(row.get("kind") or "") != "unreachable":
             continue
         if str(row.get("device") or "").lower() != device_name.lower():
             continue
-        key = (str(row.get("acl") or "").lower(), row.get("sequence"), str(row.get("ace") or "").lower())
+        key = _ace_key(row)
         text = str(row.get("text") or "")
-        if key in added and text:
+        if not text:
+            continue
+        if key in added or (before_warnings is not None and key not in already):
             notices.append(text)
     return notices
 
@@ -785,14 +1011,37 @@ def _covered_by_any(acl: Any, ace: Any) -> bool:
     return any(item.seq < ace.seq and item.text.lower() in {"permit ip any any", "permit any"} for item in acl.aces)
 
 
-def _unreachable_matches(row: dict[str, Any], device_name: str, acl_name: str, ace_text: str) -> bool:
+def _unreachable_matches(
+    row: dict[str, Any],
+    device_name: str,
+    acl_name: str,
+    ace_text: str,
+    ace_seq: int,
+    *,
+    unique: bool = False,
+) -> bool:
+    """True when this Batfish row is this ACE, not an earlier copy of its text."""
     sources = " ".join(_text_list(row.get("Sources"))).lower()
     if acl_name.lower() not in sources:
         return False
     if device_name.lower() not in sources and ":" in sources:
         return False
-    _seq, reported = split_sequence(str(row.get("Unreachable_Line") or ""))
-    return reported.lower() == ace_text.lower()
+    reported_seq, reported = split_sequence(str(row.get("Unreachable_Line") or ""))
+    if reported.lower() != ace_text.lower():
+        return False
+    if reported_seq is not None:
+        return reported_seq == ace_seq
+    return unique
+
+
+def _matching_line_order(row: dict[str, Any]) -> tuple[int, int]:
+    """Earliest matching ACE. Sequence wins over an identical later line."""
+    sequence, _text = split_sequence(str(row.get("Line") or ""))
+    index = _as_int(row.get("Line_Index"))
+    return (
+        sequence if sequence is not None else 1_000_000_000,
+        index if index is not None else 1_000_000_000,
+    )
 
 
 def _text_list(value: Any) -> list[str]:

@@ -325,6 +325,7 @@ def show(body: ShowIn) -> JSONResponse:
             "command": body.command,
             "text": result.text,
             "prompt": result.prompt,
+            "ok": result.ok,
             "simulated": True,
             "disclaimer": DISCLAIMER,
         }

@@ -1,8 +1,10 @@
 """Which commit this tree was built from.
 
-A packaged tarball has no .git. `git archive` writes the short commit into
-`_EMBEDDED` below. A checkout leaves that placeholder in place and the stamp
-comes from `git rev-parse`, with `-dirty` when the work tree has changes.
+A checkout uses `git rev-parse`, with `-dirty` when the work tree has changes.
+`git archive` (what GitHub uses for a source zip or tarball) replaces
+`_EMBEDDED` below because `.gitattributes` marks this file `export-subst`.
+A folder of loose files has neither a `.git` directory nor that substitution,
+so the stamp is `unknown`.
 """
 
 from __future__ import annotations

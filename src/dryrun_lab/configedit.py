@@ -103,6 +103,9 @@ def prompt_for(device: str, commands: list[str]) -> str:
     if kind == "interface":
         return f"{device}(config-if)#"
     if kind == "acl":
+        ident = context[-1][1].lower()
+        if re.search(r"\bstandard\b", ident):
+            return f"{device}(config-std-nacl)#"
         return f"{device}(config-ext-nacl)#"
     if kind == "vlan":
         return f"{device}(config-vlan)#"

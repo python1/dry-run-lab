@@ -20,6 +20,7 @@ class Probe:
     src: str
     dst: str
     note: str
+    why: str = ""
 
     @property
     def key(self) -> tuple[str, str, str, str]:
@@ -27,7 +28,10 @@ class Probe:
 
     def label(self) -> str:
         where = f"enter {self.device} {self.ingress}" if self.ingress else f"from {self.device}"
-        return f"{where}  {self.src} -> {self.dst} ({self.note})"
+        text = f"{where}  {self.src} -> {self.dst} ({self.note})"
+        if self.why:
+            return f"{text}\n    {self.why}"
+        return text
 
 
 def probes_for_lab(lab: Lab) -> list[Probe]:
@@ -74,7 +78,7 @@ def probes_for_lab(lab: Lab) -> list[Probe]:
                 )
     _add_acl_probes(lab, add)
     _add_host_probes(lab, add)
-    return found
+    return [_with_why(lab, probe) for probe in found]
 
 
 def probes_for_acl(lab: Lab, device: str, commands: list[str]) -> list[Probe]:
@@ -99,7 +103,7 @@ def probes_for_acl(lab: Lab, device: str, commands: list[str]) -> list[Probe]:
                     note=f"acl {acl_name}",
                 )
             )
-    return found
+    return [_with_why(lab, probe) for probe in found]
 
 
 def _add_acl_probes(lab: Lab, add) -> None:
@@ -154,6 +158,72 @@ def _add_host_probes(lab: Lab, add) -> None:
                     note=f"host {dest_name}",
                 )
             )
+
+
+def _with_why(lab: Lab, probe: Probe) -> Probe:
+    parts: list[str] = []
+    for address in (probe.src, probe.dst):
+        text = _sample_why(lab, address)
+        if text and text not in parts:
+            parts.append(text)
+    if not parts:
+        return probe
+    return Probe(
+        device=probe.device,
+        ingress=probe.ingress,
+        src=probe.src,
+        dst=probe.dst,
+        note=probe.note,
+        why=" ".join(parts),
+    )
+
+
+def _sample_why(lab: Lab, address: str) -> str | None:
+    """Explain a reachability address that is not configured on any interface."""
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return None
+    if not isinstance(ip, ipaddress.IPv4Address):
+        return None
+    configured = _configured_addresses(lab)
+    if any(iface_ip == address for _device, iface_ip, _network in configured):
+        return None
+    containers = [
+        (device, iface_ip, network)
+        for device, iface_ip, network in configured
+        if ip in network and network.prefixlen <= 30
+    ]
+    if not containers:
+        return None
+    containers.sort(key=lambda item: item[2].prefixlen, reverse=True)
+    network = containers[0][2]
+    named: list[str] = []
+    seen: set[str] = set()
+    for device, iface_ip, net in configured:
+        if net != network or iface_ip == address:
+            continue
+        label = f"{iface_ip} on {device}"
+        if label in seen:
+            continue
+        seen.add(label)
+        named.append(label)
+    if not named:
+        return None
+    shown = named[0] if len(named) == 1 else ", ".join(named)
+    return (
+        f"{address} is a sample host in {network}, not a configured address ({shown}). "
+        "A trace to a configured address stops on that device, so this check uses another host on the subnet."
+    )
+
+
+def _configured_addresses(lab: Lab) -> list[tuple[str, str, ipaddress.IPv4Network]]:
+    found: list[tuple[str, str, ipaddress.IPv4Network]] = []
+    for device in lab.devices:
+        for item in _subinterfaces(device.config):
+            network = ipaddress.ip_network(f"{item['address']}/{item['prefix']}", strict=False)
+            found.append((device.name, str(item["address"]), network))
+    return found
 
 
 def _subinterfaces(config: str) -> list[dict]:

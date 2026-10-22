@@ -42,6 +42,7 @@ class Lab:
     devices: list[Device] = field(default_factory=list)
     links: list[Link] = field(default_factory=list)
     dismissed: list[str] = field(default_factory=list)
+    withdrawn: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     warnings: list[dict] = field(default_factory=list)
     engine_error: str | None = None
@@ -99,6 +100,7 @@ def lab_to_dict(lab: Lab) -> dict:
             for link in lab.links
         ],
         "dismissed": list(lab.dismissed),
+        "withdrawn": list(lab.withdrawn),
         "notes": list(lab.notes),
         "warnings": lab.warnings,
         "engineError": lab.engine_error,
@@ -134,6 +136,7 @@ def lab_from_dict(data: dict) -> Lab:
             )
         )
     lab.dismissed = [str(item) for item in data.get("dismissed") or []]
+    lab.withdrawn = [str(item) for item in data.get("withdrawn") or []]
     lab.notes = [str(item) for item in data.get("notes") or []]
     lab.warnings = list(data.get("warnings") or [])
     lab.engine_error = data.get("engineError")
@@ -242,6 +245,7 @@ def add_user_link(lab: Lab, a_device: str, a_interface: str, b_device: str, b_in
     b_interface = canonical_interface(b_interface)
     key = endpoint_key(a_device, a_interface, b_device, b_interface)
     lab.dismissed = [item for item in lab.dismissed if item != key]
+    lab.withdrawn = [item for item in lab.withdrawn if item != key]
     for link in lab.links:
         if endpoint_key(link.a_device, link.a_interface, link.b_device, link.b_interface) == key:
             link.status = "confirmed"
@@ -278,15 +282,19 @@ def _seat_linked_host(lab: Lab, left: Device | None, right: Device | None) -> No
 
 
 def unconfirm_link(lab: Lab, link_id_value: str) -> str:
-    """Set a confirmed cable back to suggested.
+    """Set a confirmed cable back to suggested and withdraw its layer-1 edge.
 
     Returns ``suggested`` when it changed, ``already`` when the cable was
     already suggested, and ``missing`` when the id is unknown.
+    A withdrawn point-to-point subnet is not written as a layer-1 edge.
     """
     for link in lab.links:
         if link.id == link_id_value:
             if link.status == "suggested":
                 return "already"
+            key = endpoint_key(link.a_device, link.a_interface, link.b_device, link.b_interface)
+            if key not in lab.withdrawn:
+                lab.withdrawn.append(key)
             link.status = "suggested"
             return "suggested"
     return "missing"
@@ -295,6 +303,8 @@ def unconfirm_link(lab: Lab, link_id_value: str) -> str:
 def confirm_link(lab: Lab, link_id_value: str) -> Link | None:
     for link in lab.links:
         if link.id == link_id_value:
+            key = endpoint_key(link.a_device, link.a_interface, link.b_device, link.b_interface)
+            lab.withdrawn = [item for item in lab.withdrawn if item != key]
             link.status = "confirmed"
             return link
     return None

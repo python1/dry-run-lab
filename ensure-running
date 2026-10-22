@@ -3,40 +3,77 @@
 set -euo pipefail
 
 OPEN=0
-for arg in "$@"; do
-  case "$arg" in
-    --open) OPEN=1 ;;
+ENGINE=java
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --open) OPEN=1; shift ;;
+    --engine)
+      if [[ $# -lt 2 ]]; then
+        printf 'Missing value for --engine\n' >&2
+        exit 2
+      fi
+      ENGINE="$2"
+      shift 2
+      ;;
+    --engine=*)
+      ENGINE="${1#--engine=}"
+      shift
+      ;;
     -h|--help)
       cat <<'EOF'
-Usage: ./ensure-running [--open]
+Usage: ./ensure-running [--open] [--engine java|docker]
 
 Start Dry Run Lab on 127.0.0.1:8742 if it is not already running.
 When a lab is saved and nothing has been computed yet, reload that
 lab and recompute once the analysis engine is up. Safe to run again.
 No systemd.
 
+Uses sudo and apt to install OpenJDK 21 (openjdk-21-jre-headless)
+system-wide when java is missing or older than 21. Also installs
+curl, python3-venv, and ca-certificates when those are missing.
+Downloads the Batfish jar, question templates, and the matching
+client wheel, then creates a virtualenv. The default engine is Java.
+If Java does not open port 9996, this script stops and points at the
+log. It does not install or start Docker.
+
+DRYRUN_HOME overrides the data directory for this run. The path
+that is used is recorded for later shells.
+
 Run this after a computer restart and after an Update Bot's Computer
 wipe. A virtualenv left in the home folder is recreated when its
 Python interpreter is missing or no longer matches.
 
---open    Open the lab in a browser. Off unless you pass this flag.
-          The browser uses a dedicated profile and is not asked to
-          accept anyone's terms.
+--open            Open the lab in a browser. Off unless you pass this flag.
+                  The browser uses a dedicated profile and is not asked to
+                  accept anyone's terms.
+--engine docker   Start the official Batfish image instead of Java.
+                  Untested. Off unless you pass this flag. The default
+                  is Java only.
 EOF
       exit 0
       ;;
     *)
-      printf 'Unknown argument: %s\n' "$arg" >&2
+      printf 'Unknown argument: %s\n' "$1" >&2
       exit 2
       ;;
   esac
 done
+case "$ENGINE" in
+  java|docker) ;;
+  *)
+    printf 'Unknown engine: %s\n' "$ENGINE" >&2
+    exit 2
+    ;;
+esac
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=bin/dryrun-home.sh
+source "$ROOT/bin/dryrun-home.sh"
 export DRYRUN_REPO="$ROOT"
-export DRYRUN_HOME="${DRYRUN_HOME:-$HOME/.local/share/dryrun-lab}"
+export DRYRUN_HOME="$(dryrun_resolve_home "$ROOT")"
 DATA="$DRYRUN_HOME"
 mkdir -p "$DATA"
+dryrun_record_home "$ROOT" "$DATA"
 LOG="$DATA/ensure.log"
 touch "$LOG"
 
@@ -200,7 +237,7 @@ start_java() {
 
 start_docker() {
   local image="batfish/allinone:v2026.08.27"
-  log "falling back to the official ${image} image"
+  log "starting docker engine ${image} because --engine docker was set; this path is untested"
   if ! command -v docker >/dev/null 2>&1; then
     apt_logged as_root apt-get update -qq
     apt_logged as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io
@@ -223,7 +260,28 @@ start_docker() {
     -runclient false -loglevel warn \
     -coordinatorargs "-templatedirs questions -containerslocation /data/containers -workbindhost 127.0.0.1" \
     -batfishargs "-servicebindhost 127.0.0.1" >>"$LOG" 2>&1
-  wait_port 9996 90
+  if wait_port 9996 90; then
+    return 0
+  fi
+  log "docker engine did not open 9996"
+  return 1
+}
+
+start_engine() {
+  if [[ "$ENGINE" == "docker" ]]; then
+    if ! start_docker; then
+      say "Docker did not open 127.0.0.1:9996. See $LOG"
+      return 1
+    fi
+    return 0
+  fi
+  if start_java; then
+    return 0
+  fi
+  say "Java did not open 127.0.0.1:9996. The analysis engine was not started."
+  say "See $LOG and $DATA/batfish.log."
+  say "Docker was not started. It is an untested option: ./ensure-running --engine docker"
+  return 1
 }
 
 python_home() {
@@ -351,8 +409,8 @@ PY
 install_packages
 say "Preparing Dry Run Lab…"
 python3 "$ROOT/tools/fetch_batfish.py" "$DATA/batfish" 2>&1 | tee -a "$LOG"
-if ! start_java; then
-  start_docker
+if ! start_engine; then
+  exit 1
 fi
 install_python
 start_server

@@ -137,40 +137,84 @@ def split_sequence(line: str) -> tuple[int | None, str]:
 
 
 def sequence_of(config: str, acl_name: str, ace_text: str) -> int | None:
-    _seq, want = split_sequence(ace_text)
+    """Sequence of one ACE.
+
+    A sequence written on the line is that line, even when an earlier ACE
+    has the same text. Without a sequence, identical lines are left unnamed
+    rather than reported as the first copy.
+    """
+    reported, want = split_sequence(ace_text)
+    found: list[int] = []
     for acl in parse_acls(config):
         if acl.name.lower() != acl_name.lower():
             continue
         for ace in acl.aces:
-            if ace.text.lower() == want.lower():
+            if ace.text.lower() != want.lower():
+                continue
+            if reported is not None and ace.seq == reported:
                 return ace.seq
+            found.append(ace.seq)
+    if reported is not None or len(found) != 1:
+        return None
+    return found[0]
+
+
+def ace_at_index(config: str, acl_name: str, index: int | None) -> tuple[int, str] | None:
+    """Sequence and text of the ACE at a filter line index."""
+    if index is None or index < 0:
+        return None
+    for acl in parse_acls(config):
+        if acl.name.lower() != acl_name.lower():
+            continue
+        ordered = sorted(acl.aces, key=lambda ace: ace.seq)
+        if index >= len(ordered):
+            return None
+        ace = ordered[index]
+        return ace.seq, ace.text
     return None
 
 
 def added_aces(before: str, after: str) -> list[tuple[Acl, Ace]]:
+    """Lines in `after` that this edit introduced.
+
+    The same text and sequence is the line that was already there. A new
+    sequence is a new line unless it only replaces a copy whose sequence
+    disappeared, as a resequence does. Identical text is not counted by
+    walking from the top, so a duplicate inserted earlier is the new line.
+    """
     from collections import Counter
 
-    old: Counter[tuple[str, str]] = Counter()
+    old: dict[tuple[str, str], Counter[int]] = {}
     for acl in parse_acls(before):
         for ace in acl.aces:
-            old[(acl.name.lower(), ace.text.lower())] += 1
-    seen: Counter[tuple[str, str]] = Counter()
-    found: list[tuple[Acl, Ace]] = []
+            old.setdefault((acl.name.lower(), ace.text.lower()), Counter())[ace.seq] += 1
+    pending: list[tuple[Acl, Ace]] = []
     for acl in parse_acls(after):
         for ace in acl.aces:
             key = (acl.name.lower(), ace.text.lower())
-            seen[key] += 1
-            if seen[key] > old[key]:
-                found.append((acl, ace))
+            counts = old.get(key)
+            if counts is not None and counts[ace.seq] > 0:
+                counts[ace.seq] -= 1
+                continue
+            pending.append((acl, ace))
+    found: list[tuple[Acl, Ace]] = []
+    for acl, ace in pending:
+        counts = old.get((acl.name.lower(), ace.text.lower()))
+        leftover = next((seq for seq, count in (counts or {}).items() if count > 0), None)
+        if leftover is not None and counts is not None:
+            counts[leftover] -= 1
+            continue
+        found.append((acl, ace))
     return found
 
 
 def shadow_sentence(acl: Acl, ace: Ace, blocking: list[str]) -> str:
+    """Say which line cannot match. Callers add 'added' only for a new line."""
     blocker = _blocking_ace(acl, ace, blocking)
     if blocker is None:
-        return f"Line added at sequence {ace.seq}; it will never match."
+        return f"Line at sequence {ace.seq}; it will never match."
     return (
-        f"Line added at sequence {ace.seq}, after sequence {blocker.seq} {blocker.text}; "
+        f"Line at sequence {ace.seq}, after sequence {blocker.seq} {blocker.text}; "
         "it will never match."
     )
 

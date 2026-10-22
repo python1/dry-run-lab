@@ -225,6 +225,8 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(result.get("text") or "")
             if not str(result.get("text") or "").endswith("\n"):
                 print()
+            if result.get("ok") is False:
+                return 1
         elif args.cmd == "confirm":
             _request(args.url, "POST", f"/api/links/{args.link_id}/confirm")
             print(f"confirmed {args.link_id}")
