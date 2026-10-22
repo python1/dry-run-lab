@@ -120,7 +120,7 @@ def test_unknown_commands_and_pipes_are_not_ok(tmp_path, monkeypatch: pytest.Mon
     unknown = engine.show_result(lab, "R1", "frobnicate")
     assert unknown.ok is False
     assert unknown.prompt == "R1#"
-    assert "Unrecognized command" in unknown.text
+    assert "Invalid input detected" in unknown.text
     assert "[computed]" in unknown.text
 
     piped = engine.show_result(lab, "R1", "show ip route | include 10")

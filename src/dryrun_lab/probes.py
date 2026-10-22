@@ -81,6 +81,24 @@ def probes_for_lab(lab: Lab) -> list[Probe]:
     return [_with_why(lab, probe) for probe in found]
 
 
+def probes_for_commands(lab: Lab, commands: list[str]) -> list[Probe]:
+    """Host flows on VLANs or subnets named by this edit.
+
+    A trunk `allowed vlan` change, an access VLAN, or a subinterface VLAN
+    is enough. The same probes run before and after, so a fix or a break
+    shows up in the change summary.
+    """
+    return _host_flows(lab, _vlans_in_commands(commands))
+
+
+def probes_for_interfaces(lab: Lab, device: str, interface: str) -> list[Probe]:
+    """Host flows on the VLANs of one port. Used when a cable changes."""
+    owner = lab.device(device)
+    if owner is None:
+        return []
+    return _host_flows(lab, _interface_vlans(owner.config, interface))
+
+
 def probes_for_acl(lab: Lab, device: str, commands: list[str]) -> list[Probe]:
     from dryrun_lab.configedit import acl_flows, ingress_interfaces
 
@@ -128,6 +146,178 @@ def _add_acl_probes(lab: Lab, add) -> None:
                         note=f"acl {acl_name}",
                     )
                 )
+
+
+def _vlans_in_commands(commands: list[str]) -> set[int]:
+    found: set[int] = set()
+    for raw in commands:
+        line = " ".join(raw.strip().split())
+        for match in re.finditer(r"(?i)(?:vlan|dot1q)\s+(\d+)\b", line):
+            found.add(int(match.group(1)))
+        listed = re.search(r"(?i)allowed\s+vlan(?:\s+(?:add|remove|except))?\s+([0-9,\-]+)", line)
+        if listed:
+            found.update(_expand_vlans(listed.group(1)))
+    return {vlan for vlan in found if 1 <= vlan <= 4094}
+
+
+def _expand_vlans(text: str) -> set[int]:
+    found: set[int] = set()
+    for part in text.split(","):
+        piece = part.strip()
+        if not piece:
+            continue
+        if "-" in piece:
+            left, right = piece.split("-", 1)
+            if left.isdigit() and right.isdigit():
+                start, end = int(left), int(right)
+                if 0 < end - start <= 4094:
+                    found.update(range(start, end + 1))
+            continue
+        if piece.isdigit():
+            found.add(int(piece))
+    return found
+
+
+def _host_flows(lab: Lab, vlans: set[int]) -> list[Probe]:
+    if not vlans:
+        return []
+    hosts = [device for device in lab.devices if device.role == "host" and _host_vlan(lab, device) in vlans]
+    if not hosts:
+        return []
+    targets = _forward_targets(lab)
+    found: list[Probe] = []
+    for host in hosts:
+        source = _host_address(host.config)
+        if source is None:
+            continue
+        vlan = _host_vlan(lab, host)
+        for address, note in targets:
+            if address == source:
+                continue
+            found.append(
+                Probe(
+                    device=host.name,
+                    ingress=None,
+                    src=source,
+                    dst=address,
+                    note=f"vlan {vlan} {note}",
+                )
+            )
+    return found
+
+
+def _host_vlan(lab: Lab, host) -> int | None:
+    for link in lab.links:
+        if link.a_device.lower() == host.name.lower():
+            other, iface = link.b_device, link.b_interface
+        elif link.b_device.lower() == host.name.lower():
+            other, iface = link.a_device, link.a_interface
+        else:
+            continue
+        device = lab.device(other)
+        if device is None:
+            continue
+        vlan = _access_vlan(device.config, iface)
+        if vlan is not None:
+            return vlan
+    address = _host_address(host.config)
+    if address is None:
+        return None
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return None
+    for device in lab.devices:
+        for item in _subinterfaces(device.config):
+            if item["vlan"] is None or item["prefix"] is None:
+                continue
+            network = ipaddress.ip_network(f"{item['address']}/{item['prefix']}", strict=False)
+            if ip in network:
+                return int(item["vlan"])
+    return None
+
+
+def _access_vlan(config: str, interface: str) -> int | None:
+    want = canonical_interface(interface)
+    current: str | None = None
+    vlan: int | None = None
+    seen = False
+    for raw in config.splitlines():
+        match = re.match(r"(?i)^interface\s+(\S+)", raw.strip())
+        if match:
+            if seen:
+                return vlan
+            current = canonical_interface(match.group(1))
+            seen = current == want
+            vlan = None
+            continue
+        if not seen:
+            continue
+        access = re.match(r"(?i)^switchport\s+access\s+vlan\s+(\d+)", raw.strip())
+        if access:
+            vlan = int(access.group(1))
+    return vlan if seen else None
+
+
+def _interface_vlans(config: str, interface: str) -> set[int]:
+    want = canonical_interface(interface)
+    current: str | None = None
+    found: set[int] = set()
+    capture = False
+    for raw in config.splitlines():
+        match = re.match(r"(?i)^interface\s+(\S+)", raw.strip())
+        if match:
+            current = canonical_interface(match.group(1))
+            capture = current == want or current.split(".", 1)[0] == want
+            continue
+        if not capture:
+            continue
+        access = re.match(r"(?i)^switchport\s+access\s+vlan\s+(\d+)", raw.strip())
+        if access:
+            found.add(int(access.group(1)))
+        encap = re.match(r"(?i)^encapsulation\s+dot1q\s+(\d+)", raw.strip())
+        if encap:
+            found.add(int(encap.group(1)))
+        allowed = re.search(r"(?i)allowed\s+vlan(?:\s+(?:add|remove|except))?\s+([0-9,\-]+)", raw.strip())
+        if allowed and "add" not in raw.lower() and "remove" not in raw.lower() and "except" not in raw.lower():
+            found.update(_expand_vlans(allowed.group(1)))
+        elif allowed:
+            found.update(_expand_vlans(allowed.group(1)))
+    return found
+
+
+def _host_address(config: str) -> str | None:
+    for item in _subinterfaces(config):
+        if item.get("address"):
+            return str(item["address"])
+    return None
+
+
+def _forward_targets(lab: Lab) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def add(address: str, note: str) -> None:
+        if address in seen:
+            return
+        seen.add(address)
+        found.append((address, note))
+
+    for device in lab.devices:
+        if device.role == "host":
+            address = _host_address(device.config)
+            if address:
+                add(address, f"host {device.name}")
+            from dryrun_lab.hosts import gateway_address
+
+            gateway = gateway_address(device.config)
+            if gateway:
+                add(gateway, "gateway")
+            continue
+        for item in _subinterfaces(device.config):
+            if item.get("address"):
+                add(str(item["address"]), device.name)
+    return found
 
 
 def _add_host_probes(lab: Lab, add) -> None:

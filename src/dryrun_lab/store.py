@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from dryrun_lab.configparse import parse_config
+from dryrun_lab.ioscheck import display_config, version_note
 from dryrun_lab.nsort import interface_key
 from dryrun_lab.infer import Inference, Suggestion, endpoint_key, infer, link_id
 
@@ -63,11 +65,12 @@ class Store:
             self.lab = lab_from_dict(json.loads(path.read_text(encoding="utf-8")))
 
     def save(self) -> None:
+        """Write the lab by renaming a temp file, so a crash cannot leave a partial file."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps(lab_to_dict(self.lab), indent=2) + "\n",
-            encoding="utf-8",
-        )
+        payload = json.dumps(lab_to_dict(self.lab), indent=2) + "\n"
+        temporary = self.path.with_name(self.path.name + ".tmp")
+        temporary.write_text(payload, encoding="utf-8")
+        os.replace(temporary, self.path)
 
 
 def lab_to_dict(lab: Lab) -> dict:
@@ -331,6 +334,8 @@ def public_lab(lab: Lab) -> dict:
     for device, raw in zip(lab.devices, payload["devices"]):
         parsed = parse_config(device.config)
         ordered = sorted(parsed.interfaces, key=lambda iface: interface_key(iface.name))
+        raw["config"] = display_config(device.config)
+        raw["versionNote"] = version_note(device.config) or ""
         raw["interfaces"] = [
             {
                 "name": iface.name,

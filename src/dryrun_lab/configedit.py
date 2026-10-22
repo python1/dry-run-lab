@@ -11,6 +11,7 @@ import re
 
 from dryrun_lab.acls import apply_acl_body, apply_resequence_command, is_resequence
 from dryrun_lab.configparse import canonical_interface
+from dryrun_lab.ioscheck import fold_line
 
 _STANZA = re.compile(r"^(interface|vlan|router|ip access-list|line|banner)\b", re.IGNORECASE)
 _ENTER = {"configure terminal", "configure", "conf t", "conf term", "conf terminal"}
@@ -30,6 +31,7 @@ def apply_config_lines(config: str, commands: list[str]) -> str:
         line = raw.strip()
         if not line or line.startswith("!"):
             continue
+        line = fold_line(line)
         lower = line.lower()
         if lower in {"end", "abort"}:
             break
@@ -157,6 +159,8 @@ def acl_flows(commands: list[str]) -> list[tuple[str, str, str]]:
         if match and current:
             src = _representative(match.group(1), match.group(2))
             dst = _representative(match.group(3), match.group(4))
+            if src is None or dst is None:
+                continue
             found.append((current, src, dst))
     return found
 
@@ -175,9 +179,12 @@ def ingress_interfaces(config: str, acl_name: str) -> list[str]:
     return found
 
 
-def _representative(network: str, wildcard: str) -> str:
-    base = ipaddress.IPv4Address(network)
-    wild = int(ipaddress.IPv4Address(wildcard))
+def _representative(network: str, wildcard: str) -> str | None:
+    try:
+        base = ipaddress.IPv4Address(network)
+        wild = int(ipaddress.IPv4Address(wildcard))
+    except (ipaddress.AddressValueError, ValueError):
+        return None
     if wild == 0:
         return str(base)
     host = int(base) | (wild & 50)

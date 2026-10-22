@@ -26,15 +26,17 @@ from dryrun_lab.configparse import canonical_interface, parse_config
 from dryrun_lab.constants import COMPUTED_TAG, ENGINE_HOST, ENGINE_PORT
 from dryrun_lab.facts import annotate_warnings
 from dryrun_lab.hosts import host_document, host_limits
+from dryrun_lab.ioscheck import fold_line, invalid_input, is_harmless, unmodeled_lines
 from dryrun_lab.infer import endpoint_key
 from dryrun_lab.l2path import layer2_note
 from dryrun_lab.paths import data_home
-from dryrun_lab.probes import Probe, probes_for_acl, probes_for_lab
+from dryrun_lab.probes import Probe, probes_for_acl, probes_for_commands, probes_for_lab
 from dryrun_lab.showfmt import (
     assumed_line,
     assumed_lines_for_route_changes,
     assumed_lines_for_routes,
     assumed_lines_for_trace,
+    command_disposition,
     command_help,
     format_change_diff,
     format_ping,
@@ -42,6 +44,7 @@ from dryrun_lab.showfmt import (
     normalize_command,
     parse_flow,
     show_access_lists,
+    show_ip_ospf_neighbor,
     show_interfaces_trunk,
     show_ip_interface_brief,
     show_ip_route,
@@ -151,6 +154,44 @@ class Engine:
             lab.engine_error = f"Analysis failed: {exc}"
             self._ready = False
 
+    def summarize_mutation(self, lab: Lab, mutate, headline: str, extra: list[Probe] | None = None) -> str:
+        """Recompute after `mutate` and return the same summary a config edit prints."""
+        from dryrun_lab.store import apply_inference
+
+        self._ensure_ready(lab)
+        probes = _unique_probes(probes_for_lab(lab) + list(extra or []))
+        before_routes = _snap_routes(self._routes)
+        before_warnings = [dict(row) for row in lab.warnings]
+        self._reach_assumed = {}
+        before_reach = {probe.label(): self._reach_summary(lab, probe) for probe in probes}
+        assumed = _assumed_links(lab)
+        mutate()
+        apply_inference(lab)
+        self.recompute(lab)
+        after_probes = _unique_probes(probes + probes_for_lab(lab) + list(extra or []))
+        after_reach = {probe.label(): self._reach_summary(lab, probe) for probe in after_probes}
+        for label, summary in before_reach.items():
+            after_reach.setdefault(label, summary)
+        missing = {label: "not present" for label in after_reach if label not in before_reach}
+        before_reach.update(missing)
+        notes = _assumed_notes(
+            assumed,
+            _assumed_links(lab),
+            assumed_lines_for_route_changes(before_routes, _snap_routes(self._routes), assumed + _assumed_links(lab)),
+            _changed_reach_notes(before_reach, after_reach, self._reach_assumed),
+        )
+        return format_change_diff(
+            before_routes,
+            _snap_routes(self._routes),
+            before_warnings,
+            [dict(row) for row in lab.warnings],
+            before_reach,
+            after_reach,
+            1,
+            headline=headline,
+            assumed=notes,
+        )
+
     def show(self, lab: Lab, device_name: str, command: str) -> str:
         return self.show_result(lab, device_name, command).text
 
@@ -208,8 +249,10 @@ class Engine:
         if kind is None:
             if "|" in command:
                 detail = "% Pipes are not simulated in this version.\n\n" + command_help()
+            elif command_disposition(command) == "unmodeled":
+                detail = "% Not simulated in this version.\n\n" + command_help()
             else:
-                detail = "% Unrecognized command.\n\n" + command_help()
+                detail = "% Invalid input detected at '^' marker.\n\n" + command_help()
             return enable, _wrap(device.name, command, detail), False, False
         if kind == "running-config":
             rows = [row for row in lab.warnings if row.get("device") == device.name]
@@ -220,6 +263,10 @@ class Engine:
         if kind == "acl":
             rows = self._interfaces.get(key, [])
             return enable, _wrap(device.name, command, show_access_lists(device.config, rows)), False, True
+        if kind == "ospf-neighbor":
+            self._ensure_ready(lab)
+            body = show_ip_ospf_neighbor(self._ospf_neighbors(device.name))
+            return enable, _wrap(device.name, command, body), False, True
         self._ensure_ready(lab)
         if kind == "interfaces":
             body = show_ip_interface_brief(self._interfaces.get(key, []))
@@ -278,8 +325,9 @@ class Engine:
             lines = list(draft)
             self._drafts.pop(key, None)
             body = self._apply(lab, device, lines)
-            computed = not body.startswith("No configuration changes")
-            return enable, _wrap(device.name, command, body, prompt=current, computed=computed), True, True
+            failed = body.startswith("Change was not kept")
+            changed = not failed and not body.startswith("No configuration changes")
+            return enable, _wrap(device.name, command, body, prompt=current, computed=changed), changed, not failed
         if folded in {"revert", "rollback"}:
             return (
                 current,
@@ -301,7 +349,15 @@ class Engine:
                 False,
                 True,
             )
-        draft.append(command.strip())
+        rejected = invalid_input(draft, command.strip())
+        if rejected:
+            return (
+                current,
+                _wrap(device.name, command, rejected, prompt=current, computed=False),
+                False,
+                False,
+            )
+        draft.append(fold_line(command.strip()))
         return (
             prompt_for(device.name, draft),
             _wrap(device.name, command, "", prompt=current, computed=False),
@@ -346,9 +402,48 @@ class Engine:
 
         self._ensure_ready(lab)
         before_config = device.config
+        try:
+            return self._commit_config(
+                lab,
+                device,
+                updated,
+                applied,
+                remember,
+                edit_lines,
+                headline,
+                before_config,
+            )
+        except Exception as exc:
+            log.exception("edit failed")
+            device.config = before_config
+            if remember and device.config_history and device.config_history[-1] == before_config:
+                device.config_history.pop()
+            try:
+                apply_inference(lab)
+            except Exception:
+                log.exception("could not restore inference")
+            return f"Change was not kept. {exc}\n"
+
+    def _commit_config(
+        self,
+        lab: Lab,
+        device: Any,
+        updated: str,
+        applied: int,
+        remember: bool,
+        edit_lines: list[str] | None,
+        headline: str | None,
+        before_config: str,
+    ) -> str:
+        from dryrun_lab.store import apply_inference
+
         assumed = _assumed_links(lab)
         self._reach_assumed = {}
-        probes = _unique_probes(probes_for_lab(lab) + probes_for_acl(lab, device.name, edit_lines or []))
+        probes = _unique_probes(
+            probes_for_lab(lab)
+            + probes_for_acl(lab, device.name, edit_lines or [])
+            + probes_for_commands(lab, edit_lines or [])
+        )
         before_routes = _snap_routes(self._routes)
         before_warnings = [dict(row) for row in lab.warnings]
         before_reach = {probe.label(): self._reach_summary(lab, probe) for probe in probes}
@@ -414,11 +509,17 @@ class Engine:
         for line in assumed_lines_for_trace(trace, _assumed_links(lab)):
             if line not in bucket:
                 bucket.append(line)
+        from dryrun_lab.showfmt import explain_disposition
+
         summary = str(trace.get("disposition") or trace.get("error") or "none")
+        drop = None
         if _denied(trace):
             drop = self._drop_line(lab, probe.device, probe.src, probe.dst)
             if drop:
                 summary = summary + "; " + " ".join(drop.split())
+        sentence = explain_disposition(trace, drop, probe.dst)
+        if sentence:
+            summary = f"{summary} — {sentence}"
         return summary
 
     def _trace(self, device: str, dst: str, src: str | None, ingress: str | None) -> dict[str, Any]:
@@ -510,6 +611,42 @@ class Engine:
         except Exception:
             log.exception("filterLineReachability failed")
             return None
+
+    def _ospf_neighbors(self, device_name: str) -> list[dict[str, Any]]:
+        try:
+            with self._lock:
+                sessions = self._client().q.ospfSessionCompatibility().answer().frame()
+                processes = self._client().q.ospfProcessConfiguration().answer().frame()
+        except Exception:
+            log.exception("ospf neighbor query failed")
+            return []
+        router_ids: dict[str, str] = {}
+        for row in _records(processes):
+            node = str(row.get("Node") or "").lower()
+            router_id = str(row.get("Router_ID") or "")
+            if node and router_id:
+                router_ids[node] = router_id
+        found: list[dict[str, Any]] = []
+        for row in _records(sessions):
+            local = row.get("Interface")
+            remote = row.get("Remote_Interface")
+            if not isinstance(local, dict):
+                continue
+            hostname = str(local.get("hostname") or "")
+            if hostname.lower() != device_name.lower():
+                continue
+            remote_name = ""
+            if isinstance(remote, dict):
+                remote_name = str(remote.get("hostname") or "")
+            found.append(
+                {
+                    "router_id": router_ids.get(remote_name.lower(), ""),
+                    "address": str(row.get("Remote_IP") or ""),
+                    "interface": str(local.get("interface") or ""),
+                    "status": str(row.get("Session_Status") or ""),
+                }
+            )
+        return found
 
     def _drop_line(self, lab: Lab, device_name: str, src: str | None, dst: str) -> str | None:
         from pybatfish.datamodel.flow import HeaderConstraints
@@ -813,7 +950,30 @@ def _attach_devices(rows: list[dict[str, Any]], lab: Lab) -> list[dict[str, Any]
         device = by_file.get(stem)
         attached.append({**row, "device": device})
     configs = {device.name: device.config for device in lab.devices}
+    attached = _with_local_warnings(attached, configs)
     return annotate_warnings(attached, configs)
+
+
+def _with_local_warnings(rows: list[dict[str, Any]], configs: dict[str, str]) -> list[dict[str, Any]]:
+    """Flag unmodeled forwarding lines, and drop lines that do not affect forwarding."""
+    kept = [row for row in rows if not is_harmless(str(row.get("text") or ""))]
+    seen = {str(row.get("text") or "").strip().lower() for row in kept}
+    for device, config in configs.items():
+        for line_no, text in unmodeled_lines(config):
+            if text.lower() in seen:
+                continue
+            seen.add(text.lower())
+            kept.append(
+                {
+                    "file": f"{device}.cfg",
+                    "line": line_no,
+                    "text": text,
+                    "detail": "not simulated",
+                    "kind": "missed",
+                    "device": device,
+                }
+            )
+    return kept
 
 
 _IFACE_REF = re.compile(r"^([^[]+)\[(.+)]$")

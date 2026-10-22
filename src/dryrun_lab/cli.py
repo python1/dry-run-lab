@@ -198,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
                 if lab.get("unconfirm") == "already":
                     print(f"{args.link_id} is already suggested")
                 else:
-                    print(f"suggested {args.link_id}")
+                    _print_notice(lab, f"suggested {args.link_id}")
             else:
                 lab = _request(args.url, "GET", "/api/lab")
                 _print_links(lab)
@@ -228,17 +228,25 @@ def main(argv: list[str] | None = None) -> int:
             if result.get("ok") is False:
                 return 1
         elif args.cmd == "confirm":
-            _request(args.url, "POST", f"/api/links/{args.link_id}/confirm")
-            print(f"confirmed {args.link_id}")
+            lab = _request(args.url, "POST", f"/api/links/{args.link_id}/confirm")
+            _print_notice(lab, f"confirmed {args.link_id}")
         elif args.cmd == "dismiss":
-            _request(args.url, "POST", f"/api/links/{args.link_id}/dismiss")
-            print(f"dismissed {args.link_id}")
+            lab = _request(args.url, "POST", f"/api/links/{args.link_id}/dismiss")
+            _print_notice(lab, f"dismissed {args.link_id}")
     except SystemExit:
         raise
     except Exception as exc:
         print(str(exc), file=sys.stderr)
         return 1
     return 0
+
+
+def _print_notice(lab: dict, fallback: str) -> None:
+    notice = str(lab.get("notice") or "").strip()
+    if notice:
+        print(notice)
+        return
+    print(fallback)
 
 
 def _device(lab: dict, name: str) -> dict | None:
