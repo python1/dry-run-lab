@@ -40,7 +40,13 @@ A GitHub source archive is produced by `git archive`, which stamps the commit in
 - `python3-venv`, if `ensurepip` is missing
 - `ca-certificates`, if the system bundle is missing
 
-It then downloads the Batfish jar, question templates, and the matching pybatfish wheel from one pinned Docker Hub image layer, creates a virtualenv, and installs those into it. If the Java process does not open port 9996, it installs `docker.io` and starts the official `batfish/allinone:v2026.08.27` image. Nothing is uploaded. It does not use systemd.
+It then downloads the Batfish jar, question templates, and the matching pybatfish wheel from one pinned Docker Hub image layer, creates a virtualenv, and installs those into it. The analysis engine is Java. If Java does not open port 9996, the script stops, prints the reason, and points at the log. It does not install or start Docker. Nothing is uploaded. It does not use systemd.
+
+Docker is an untested option, off unless you ask for it:
+
+```bash
+./ensure-running --engine docker
+```
 
 From a clean Debian or Ubuntu box, with `sudo` and outbound HTTPS:
 
@@ -149,6 +155,7 @@ What is actually connected:
 
 - A confirmed cable is a layer-1 edge. Suggested trunks, access ports, and host cables are not. A host ping uses confirmed cables, including the ones `link add` created. Confirm the office trunks on that path before the ping. The layer-2 line under a host trace walks confirmed cables only. A host with no confirmed link is labeled **Not modeled**.
 - A shared `/30` or `/31` with exactly two physical interfaces is also written while that cable is still suggested. The office OSPF link (`10.50.0.0/30`, R1 Gi0/2 to SW1 Gi1/0/24) is one of these, so OSPF and `traceroute 10.255.1.1 source 10.50.0.1` succeed before you confirm it. Confirming another cable, including the R1–SW1 trunk, does not remove it. `unconfirm` withdraws that edge after the cable has been confirmed. While it is still only suggested, `unconfirm` leaves the edge in place and `dismiss` removes the suggestion. If that was the only layer-1 edge, the file is empty again and the hub below can reconnect those interfaces.
+- When a computed result uses that unconfirmed cable, the text says so. `show ip route`, `ping`, `traceroute`, and a change summary that added, removed, or rechecked a path across it include a line such as `assumed link from shared /30: R1 Gi0/2 - SW1 Gi1/0/24 (not confirmed)`. The device CLI on the page prints that same line. A connected route on the interface, or a ping that stays on one device, does not. Confirming the cable removes the sentence.
 - While the layer-1 file has no edges, the engine does not read the suggestion list. It treats physical interfaces as if they shared one hub, so other shared subnets can look adjacent too. That is a fallback for an empty file, not a confirmed cable. A ping whose source and destination are both addresses on the same device, such as `ping 10.20.20.1 source 10.10.10.50 ingress GigabitEthernet0/0.10` on R1, does not use a cable at all.
 
 Ping and traceroute print one sentence under the disposition. A drop names the ACL and its sequence number. When the trace starts on a host, a following line lists the layer-2 path across confirmed links and computed VLAN membership. Switches on that line are not hops in the computed trace. A shut or down cable is drawn red and dashed after the next recompute. A host with no address, no gateway, or no confirmed link is labeled **Not modeled**.
@@ -193,7 +200,7 @@ The service is the official Batfish all-in-one jar, `org.batfish.allinone.Main`,
 
 GitHub release `v2026.08.27` publishes no jar, and Maven Central has no `org.batfish` artifacts. `tools/fetch_batfish.py` downloads the jar, question templates, and the matching pybatfish wheel from one pinned `batfish/allinone` image layer on Docker Hub (`sha256:53a5a598343f477bae7c97f39174d545529d2d080ed30ec3652c6e3e7ae0ac70`). It checks that layer and the jar (`sha256:7552e1380e79379b17e200b80d84c1671f689cb63a0d338678c1c4675157310f`) and stops if either hash differs. It does not fall back to a floating tag, and it does not start a container.
 
-Plain Java is the runtime that works here. The bytecode in that layer is Java 21, the host OpenJDK 21 starts it, and the office lab computes. `ensure-running` starts the official container `batfish/allinone:v2026.08.27` only if that Java process does not open port 9996, and it logs that tag. The container path was not needed for stage 1.
+Plain Java is the runtime that works here. The bytecode in that layer is Java 21, the host OpenJDK 21 starts it, and the office lab computes. If that process does not open port 9996, `./ensure-running` stops and points at `ensure.log` and `batfish.log`. It does not try Docker. `./ensure-running --engine docker` starts the official image `batfish/allinone:v2026.08.27` instead. That path is untested.
 
 The Java process uses `-Xms256m` and `-Xmx2g`. The 2 GB figure is the heap cap, not the memory in use. Resident size moves as the process computes, and the JVM does not always return heap to the OS. Virtual size is address space, about 5.6 GB here, and is not the RAM in use.
 

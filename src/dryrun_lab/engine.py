@@ -23,6 +23,10 @@ from dryrun_lab.l2path import layer2_note
 from dryrun_lab.paths import data_home
 from dryrun_lab.probes import Probe, probes_for_acl, probes_for_lab
 from dryrun_lab.showfmt import (
+    assumed_line,
+    assumed_lines_for_route_changes,
+    assumed_lines_for_routes,
+    assumed_lines_for_trace,
     command_help,
     format_change_diff,
     format_ping,
@@ -37,6 +41,7 @@ from dryrun_lab.showfmt import (
     show_unsimulated,
     show_vlan_brief,
     vlan_names,
+    with_assumed,
 )
 from dryrun_lab.store import Lab, Link, push_config
 
@@ -71,6 +76,7 @@ class Engine:
         self._routes: dict[str, list[dict[str, Any]]] = {}
         self._vlans: dict[str, list[dict[str, Any]]] = {}
         self._drafts: dict[str, list[str]] = {}
+        self._reach_assumed: dict[str, list[str]] = {}
         self._ready = False
 
     def healthy(self) -> bool:
@@ -184,11 +190,11 @@ class Engine:
             self._ensure_ready(lab)
             body, drop = self._flow_body(lab, device.name, flow)
             formatter = format_ping if flow["kind"] == "ping" else format_traceroute
-            text = _wrap(
-                device.name,
-                command,
+            shown = with_assumed(
                 formatter(str(flow["dst"]), flow["src"], flow["ingress"], body, drop),
+                assumed_lines_for_trace(body, _assumed_links(lab)),
             )
+            text = _wrap(device.name, command, shown)
             return enable, text, False, True
         kind = normalize_command(command)
         if kind is None:
@@ -214,7 +220,8 @@ class Engine:
         elif kind == "trunk":
             body = show_interfaces_trunk(self._interfaces.get(key, []))
         else:
-            body = show_ip_route(self._routes.get(key, []))
+            rows = self._routes.get(key, [])
+            body = with_assumed(show_ip_route(rows), assumed_lines_for_routes(device.name, rows, _assumed_links(lab)))
         return enable, _wrap(device.name, command, body), False, True
 
     def _client(self) -> Any:
@@ -331,6 +338,8 @@ class Engine:
 
         self._ensure_ready(lab)
         before_config = device.config
+        assumed = _assumed_links(lab)
+        self._reach_assumed = {}
         probes = _unique_probes(probes_for_lab(lab) + probes_for_acl(lab, device.name, edit_lines or []))
         before_routes = _snap_routes(self._routes)
         before_warnings = [dict(row) for row in lab.warnings]
@@ -355,9 +364,17 @@ class Engine:
         missing = {label: "not present" for label in after_reach if label not in before_reach}
         before_reach.update(missing)
         notices = _notices_for_added(device.name, before_config, updated, lab.warnings)
+        after_routes = _snap_routes(self._routes)
+        assumed_after = _assumed_links(lab)
+        notes = _assumed_notes(
+            assumed,
+            assumed_after,
+            assumed_lines_for_route_changes(before_routes, after_routes, assumed + assumed_after),
+            _changed_reach_notes(before_reach, after_reach, self._reach_assumed),
+        )
         return format_change_diff(
             before_routes,
-            _snap_routes(self._routes),
+            after_routes,
             before_warnings,
             [dict(row) for row in lab.warnings],
             before_reach,
@@ -365,6 +382,7 @@ class Engine:
             applied,
             headline=headline,
             notices=notices,
+            assumed=notes,
         )
 
     def _flow_body(self, lab: Lab, device_name: str, flow: dict[str, str | None]) -> tuple[dict[str, Any], str | None]:
@@ -380,6 +398,11 @@ class Engine:
 
     def _reach_summary(self, lab: Lab, probe: Probe) -> str:
         trace = self._trace(probe.device, probe.dst, probe.src, probe.ingress)
+        _rename_steps(lab, trace)
+        bucket = self._reach_assumed.setdefault(probe.label(), [])
+        for line in assumed_lines_for_trace(trace, _assumed_links(lab)):
+            if line not in bucket:
+                bucket.append(line)
         summary = str(trace.get("disposition") or trace.get("error") or "none")
         if _denied(trace):
             drop = self._drop_line(lab, probe.device, probe.src, probe.dst)
@@ -608,6 +631,47 @@ def _layer1_links(lab: Lab) -> list[Link]:
             seen.add(key)
             chosen.append(link)
     return chosen
+
+
+def _assumed_links(lab: Lab) -> list[Link]:
+    """Suggested /30 or /31 edges written into layer 1. Confirmed cables are not."""
+    return [link for link in _layer1_links(lab) if link.status != "confirmed"]
+
+
+def _changed_reach_notes(
+    before: dict[str, str],
+    after: dict[str, str],
+    used: dict[str, list[str]],
+) -> list[str]:
+    notes: list[str] = []
+    for label in set(before) | set(after):
+        if before.get(label) == after.get(label):
+            continue
+        for line in used.get(label, []):
+            if line not in notes:
+                notes.append(line)
+    return notes
+
+
+def _assumed_notes(
+    before_links: list[Link],
+    after_links: list[Link],
+    route_notes: list[str],
+    reach_notes: list[str],
+) -> list[str]:
+    wanted = set(route_notes) | set(reach_notes)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for link in [*before_links, *after_links]:
+        line = assumed_line(link)
+        if line in wanted and line not in seen:
+            seen.add(line)
+            ordered.append(line)
+    for line in [*route_notes, *reach_notes]:
+        if line not in seen and line in wanted:
+            seen.add(line)
+            ordered.append(line)
+    return ordered
 
 
 def _point_to_point_subnet(link: Link) -> bool:

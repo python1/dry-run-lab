@@ -24,3 +24,11 @@ def test_skill_and_readme_get_the_code_from_main() -> None:
     assert "25 deny ip" in readme
     assert "End with CNTL/Z." in skill
     assert "10.99.0.50" in skill
+    note = "assumed link from shared /30: R1 Gi0/2 - SW1 Gi1/0/24 (not confirmed)"
+    assert note in readme
+    assert note in skill
+    for text in (readme, skill):
+        assert "--engine docker" in text
+        assert "untested" in text.lower()
+        assert "installs `docker.io`" not in text
+        assert "installs docker.io" not in text

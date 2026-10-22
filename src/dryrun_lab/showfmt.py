@@ -10,6 +10,7 @@ import ipaddress
 import re
 from typing import Any
 
+from dryrun_lab.configparse import canonical_interface
 from dryrun_lab.nsort import interface_key
 
 _PROTOCOL = {
@@ -436,6 +437,7 @@ def format_change_diff(
     applied: int,
     headline: str | None = None,
     notices: list[str] | None = None,
+    assumed: list[str] | None = None,
 ) -> str:
     lines = [headline or f"Applied {applied} line(s). Recomputed."]
     for notice in notices or []:
@@ -451,6 +453,9 @@ def format_change_diff(
     lines.append("Reachability")
     reach_lines = _diff_reach(reach_before, reach_after)
     lines.extend(reach_lines or ["  (no reachability changes)"])
+    if assumed:
+        lines.append("")
+        lines.extend(assumed)
     return "\n".join(lines) + "\n"
 
 
@@ -609,6 +614,112 @@ def _short_interface(name: str) -> str:
         .replace("GigabitEthernet", "Gi")
         .replace("FastEthernet", "Fa")
     )
+
+
+def assumed_line(link: Any) -> str:
+    """One sentence for a suggested /30 or /31 that was written as a layer-1 edge."""
+    match = re.search(r"/(\d+)\b", str(getattr(link, "reason", "") or ""))
+    prefix = match.group(1) if match else "?"
+    left = _short_interface(str(link.a_interface))
+    right = _short_interface(str(link.b_interface))
+    return (
+        f"assumed link from shared /{prefix}: "
+        f"{link.a_device} {left} - {link.b_device} {right} (not confirmed)"
+    )
+
+
+def with_assumed(text: str, lines: list[str]) -> str:
+    if not lines:
+        return text if text.endswith("\n") or not text else text + "\n"
+    return text.rstrip("\n") + "\n" + "\n".join(lines) + "\n"
+
+
+def assumed_lines_for_routes(device: str, rows: list[dict[str, Any]], links: list[Any]) -> list[str]:
+    return [assumed_line(link) for link in links if any(_route_uses(device, row, link) for row in rows)]
+
+
+def assumed_lines_for_route_changes(
+    before: dict[str, list[dict[str, Any]]],
+    after: dict[str, list[dict[str, Any]]],
+    links: list[Any],
+) -> list[str]:
+    found: list[str] = []
+    nodes = set(before) | set(after)
+    for link in links:
+        used = False
+        for node in nodes:
+            old = {_route_key(row): row for row in before.get(node, [])}
+            new = {_route_key(row): row for row in after.get(node, [])}
+            for key in set(old) ^ set(new):
+                row = new[key] if key in new else old[key]
+                if _route_uses(node, row, link):
+                    used = True
+                    break
+            if used:
+                break
+        if used:
+            found.append(assumed_line(link))
+    return found
+
+
+def assumed_lines_for_trace(trace: dict[str, Any], links: list[Any]) -> list[str]:
+    return [assumed_line(link) for link in links if _trace_uses(trace, link)]
+
+
+def _route_uses(device: str, row: dict[str, Any], link: Any) -> bool:
+    protocol = str(row.get("protocol") or "").lower()
+    if protocol in {"connected", "local"}:
+        return False
+    via_ip, via_iface = _split_hop(row.get("next_hop"))
+    if via_iface:
+        iface = canonical_interface(via_iface).lower()
+        ends = _link_ends(link)
+        if (device.lower(), iface) in ends:
+            return True
+    network = _shared_network(link)
+    if via_ip and network is not None:
+        try:
+            if ipaddress.ip_address(via_ip) in network:
+                return True
+        except ValueError:
+            return False
+    return False
+
+
+def _trace_uses(trace: dict[str, Any], link: Any) -> bool:
+    ends = _link_ends(link)
+    for step in trace.get("steps") or []:
+        node = str(step.get("node") or "").lower()
+        detail = step.get("detail") or {}
+        if not isinstance(detail, dict):
+            continue
+        for key in ("inputInterface", "outputInterface", "interface"):
+            iface = detail.get(key)
+            if not iface:
+                continue
+            if (node, canonical_interface(str(iface)).lower()) in ends:
+                return True
+    return False
+
+
+def _link_ends(link: Any) -> set[tuple[str, str]]:
+    return {
+        (str(link.a_device).lower(), canonical_interface(str(link.a_interface)).lower()),
+        (str(link.b_device).lower(), canonical_interface(str(link.b_interface)).lower()),
+    }
+
+
+def _shared_network(link: Any) -> ipaddress.IPv4Network | None:
+    match = re.search(r"(\d+\.\d+\.\d+\.\d+/\d+)", str(getattr(link, "reason", "") or ""))
+    if not match:
+        return None
+    try:
+        network = ipaddress.ip_network(match.group(1), strict=False)
+    except ValueError:
+        return None
+    if not isinstance(network, ipaddress.IPv4Network):
+        return None
+    return network
 
 
 _IP = re.compile(r"\d+\.\d+\.\d+\.\d+")
