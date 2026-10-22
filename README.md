@@ -6,6 +6,34 @@ Dry Run Lab is a local simulator for a small vendor-style network. You draw rout
 
 Computed results are a simulation from these configs. They are not proof that a live network will behave the same way. Not affiliated with or endorsed by Cisco.
 
+## Supported commands
+
+The device CLI computes these:
+
+- `show running-config`
+- `show ip interface brief`
+- `show ip route`
+- `show vlan brief`
+- `show interfaces trunk`
+- `show access-lists`
+- `show ip ospf neighbor`
+- `show warnings`
+- `ping` and `traceroute`
+- `configure terminal` … `end`, and `abort`
+- `revert`
+
+`revert` undoes one `configure terminal` … `end` block on that device and recomputes. Run it again to undo the block before that.
+
+`show ip ospf neighbor` is computed from OSPF sessions. The transcript says it is computed. Priority and dead time are not part of that session.
+
+A `show` command this lab does not compute, such as `show version` or `show spanning-tree`, answers `% Not simulated in this version.` A command that is not a command answers `% Invalid input detected at '^' marker.` Pipes are refused.
+
+## Cables on the page
+
+Click a port dot, then click the port dot on the other device. That draws the cable. Dragging a card moves the device. The port dot is the click target.
+
+Confirming or rejecting a suggested cable recomputes and prints the same routes, warnings, and reachability summary as a config edit. The first line says `Confirmed` or `Rejected`.
+
 ## Get the code
 
 The checkout is the directory that contains `ensure-running`, `bin/dryrun-lab`, and `examples/office-lab`.
@@ -107,7 +135,7 @@ The CLI only talks to `127.0.0.1` or `localhost`. It reads config files locally 
 
 `bin/dryrun-lab --version` prints the build commit, for example `dryrun-lab 7a7dd64`. The same stamp is the first line of each `ensure-running` log and sits next to the credit in the page footer. A checkout uses `git rev-parse`, and adds `-dirty` when the work tree has changes. A GitHub source archive (or any `git archive`) has no `.git` directory; the commit is written into `src/dryrun_lab/version.py` when the archive is built. A folder of loose files, with the placeholder still in that file and no `.git` directory, prints `dryrun-lab unknown`.
 
-`configure terminal` edits that device's config. The prompt becomes `R1(config)#`, then `R1(config-if)#`, `R1(config-ext-nacl)#`, `R1(config-std-nacl)#`, `R1(config-vlan)#`, or `R1(config-router)#` in those sub-modes. The banner says `End with CNTL/Z.` `end` recomputes and prints what changed in routes, warnings, and reachability, tagged `[computed]`. `abort` discards the lines and does not recompute. `revert` undoes one edit on that device and recomputes. Call it again to undo the edit before that. The transcript says `Reverted one edit. Recomputed.` A second `revert` with nothing left says `Nothing to revert on this device.` The same commands work in the page's device CLI.
+`configure terminal` edits that device's config. The prompt becomes `R1(config)#`, then `R1(config-if)#`, `R1(config-ext-nacl)#`, `R1(config-std-nacl)#`, `R1(config-vlan)#`, or `R1(config-router)#` in those sub-modes. The banner says `End with CNTL/Z.` `end` recomputes and prints what changed in routes, warnings, and reachability, tagged `[computed]`. `abort` discards the lines and does not recompute. `revert` undoes one `configure terminal` … `end` block on that device and recomputes. Call it again to undo the block before that. The transcript says `Reverted one edit. Recomputed.` A second `revert` with nothing left says `Nothing to revert on this device.` The same commands work in the page's device CLI. A line the device would reject, such as an invalid address, a misspelled keyword, or a glued command, is refused at the prompt with `% Invalid input detected at '^' marker.` That line is not added to the edit, and a failed edit is not written to disk.
 
 An inbound ACL is tested with `source` and `ingress`. The source is a host in the denied subnet, and `ingress` is the interface where the ACL is applied inbound. A ping that starts on the router itself does not pass through that inbound list.
 
@@ -134,11 +162,11 @@ bin/dryrun-lab show R1 $'configure terminal\ninterface GigabitEthernet0/0\n shut
 bin/dryrun-lab show R1 revert
 ```
 
-Supported device-CLI commands: `show running-config`, `show ip interface brief`, `show ip route`, `show vlan brief`, `show interfaces trunk`, `show access-lists`, `show warnings`, `ping`, `traceroute`, `configure terminal`, and `revert`. Pipes are refused. Interface lists use natural port order, so Gi1/0/2 comes before Gi1/0/10.
+Supported device-CLI commands: `show running-config`, `show ip interface brief`, `show ip route`, `show vlan brief`, `show interfaces trunk`, `show access-lists`, `show ip ospf neighbor`, `show warnings`, `ping`, `traceroute`, `configure terminal`, and `revert`. Pipes are refused. A show command this lab does not compute says it is not simulated in this version. Interface lists use natural port order, so Gi1/0/2 comes before Gi1/0/10. Config keywords are accepted in any case and stored lowercase. Names, such as an ACL name, keep the case you typed.
 
-`show access-lists` prints sequence numbers (`10`, `20`, `30`, …). A line typed in `ip access-list` mode without a number is appended and gets the last sequence plus 10. A line that starts with a number is inserted at that sequence. `show running-config` does not print those numbers, and the saved config does not gain them, unless you typed the number on that line or `ip access-list resequence` wrote the new numbers. A number is also kept when leaving it off would make the next read assign a different sequence, which happens after an earlier line is removed. `no 25` and `no deny ip …` remove an entry. `ip access-list resequence NAME START STEP` renumbers that list and stores the new numbers. A resequence command this lab does not apply is left in the config and reported as not simulated. A new entry that can never match, because an earlier line already matches everything it would, is called out when the edit is committed, including in the Warnings section of the change summary.
+`show access-lists` always prints sequence numbers (`10`, `20`, `30`, …). A line typed in `ip access-list` mode without a number is appended and gets the last sequence plus 10. A line that starts with a number is inserted at that sequence. From IOS-XE 16.12, sequence numbers are nvgened: `show running-config` and the config panel show a sequence number on every ACL entry. Remarks are numbered on 16.12 and later. That remark behavior is unconfirmed. On an older version line, `show running-config` prints the ACL entries without sequence numbers. The saved config keeps a number when you typed it, when `ip access-list resequence` wrote it, or when leaving it off would assign a different sequence on the next read, which happens after an earlier line is removed. A device with no `version` line uses the 16.12 behavior and shows `No version line found; assuming IOS-XE 16.12 or later`. `no 25` and `no deny ip …` remove an entry. `ip access-list resequence NAME START STEP` renumbers that list and stores the new numbers. A resequence command this lab does not apply is left in the config and reported as not simulated. A new entry that can never match, because an earlier line already matches everything it would, is called out when the edit is committed, including in the Warnings section of the change summary.
 
-A host is an end device: one interface address and `ip default-gateway`. Add one from the shell, or with **Add a host** on the page. A new host starts below the other cards. `link add` moves it under the switch or router that cable attaches to, so a server cabled to SW3 sits with SW3.
+A host is an end device: one interface address and `ip default-gateway`. Add one from the shell, or with **+ Host** on the page. The page requires the name, the IP address, the mask, and the gateway. A new host starts below the other cards. `link add` moves it under the switch or router that cable attaches to, so a server cabled to SW3 sits with SW3. On the canvas, click one port dot and then the other port dot to draw a cable. Dragging a card moves the device.
 
 ```bash
 bin/dryrun-lab host add PC40 --ip 10.40.40.50/24 --gw 10.40.40.1
@@ -185,13 +213,17 @@ One router (router-on-a-stick, OSPF on a `/30`, one extended ACL) and three swit
 
 Each example device contains `ip default-gateway`. The lab reads that device's config: if `ip routing` is enabled, the line is **ignored when ip routing is enabled** (R1 and SW1). If it is not, the line stays in the **not simulated** list (SW2 and SW3). The hostname is not special-cased.
 
+Lines that can change forwarding, and that this lab does not apply, are listed as **not simulated**. That group is `spanning-tree` (including `spanning-tree mode rapid-pvst` and `spanning-tree portfast`), `storm-control`, `switchport port-security`, `switchport block`, `ip dhcp snooping`, `ip arp inspection`, `ip verify unicast`, `channel-group`, `udld`, `mac access-group`, `policy-map`, `class-map`, `service-policy`, `mls qos`, and `vtp mode`. The office access ports include `spanning-tree portfast`, so those lines show up on SW2 and SW3.
+
+Lines with no effect on the forwarding this lab computes are kept and are not flagged. That group is `logging` (including `logging host`), `snmp-server`, `ntp`, `banner`, `username`, `enable secret`, `enable password`, `line`, `alias`, `service`, `clock`, `boot`, `license`, `archive`, `parser`, and `ip domain`.
+
 ## What this stage computes
 
 - A canvas for routers, switches, hosts, and interface-to-interface cables
 - Link suggestions from interface descriptions, pasted CDP or LLDP text, and a shared `/30` with exactly two physical interfaces, plus confirm and dismiss
 - Hosts and cables from the page or from `host add` and `link add`, and `link unconfirm` to make a confirmed cable suggested again
 - Per-device config paste, with parse warnings kept visible
-- Device CLI: `show running-config`, `show ip interface brief`, `show ip route`, `show vlan brief`, `show interfaces trunk`, `show access-lists`, `show warnings`, `ping`, `traceroute`, `configure terminal`, and `revert`
+- Device CLI: `show running-config`, `show ip interface brief`, `show ip route`, `show vlan brief`, `show interfaces trunk`, `show access-lists`, `show ip ospf neighbor`, `show warnings`, `ping`, `traceroute`, `configure terminal`, and `revert`
 - The same actions from `dryrun-lab`
 
 ## Engine
