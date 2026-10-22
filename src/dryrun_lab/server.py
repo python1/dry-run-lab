@@ -10,12 +10,16 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
+from starlette.requests import Request
 
 from dryrun_lab.constants import CREDIT, DISCLAIMER, WEB_HOST, WEB_PORT
 from dryrun_lab.version import version
 from dryrun_lab.engine import Engine, EngineUnavailable
+from dryrun_lab.hosts import host_config
+from dryrun_lab.ioscheck import same_displayed_config
 from dryrun_lab.examples import load_office_lab
 from dryrun_lab.paths import data_home, static_dir
+from dryrun_lab.probes import probes_for_interfaces
 from dryrun_lab.store import (
     Device,
     Store,
@@ -62,6 +66,18 @@ async def _lifespan(_app: FastAPI):
 app = FastAPI(title="Dry Run Lab", docs_url=None, redoc_url=None, openapi_url=None, lifespan=_lifespan)
 
 
+@app.exception_handler(Exception)
+async def _json_error(_request: Request, exc: Exception) -> JSONResponse:
+    """Every failure is JSON. The page does not have to parse a plain-text 500."""
+    if isinstance(exc, HTTPException):
+        detail = exc.detail if isinstance(exc.detail, str) else "Request failed"
+        return JSONResponse({"detail": detail}, status_code=exc.status_code)
+    if isinstance(exc, EngineUnavailable):
+        return JSONResponse({"detail": str(exc)}, status_code=503)
+    log.exception("request failed")
+    return JSONResponse({"detail": "The change was not saved."}, status_code=500)
+
+
 class DeviceIn(BaseModel):
     name: str
     role: str = "router"
@@ -69,6 +85,9 @@ class DeviceIn(BaseModel):
     neighborText: str = ""
     x: float | None = None
     y: float | None = None
+    ip: str = ""
+    mask: str = ""
+    gateway: str = ""
 
 
 class DeviceUpdate(BaseModel):
@@ -186,7 +205,10 @@ def add_device(body: DeviceIn) -> dict:
     with _store.lock:
         if _store.lab.device(body.name):
             raise HTTPException(409, "A device with that name already exists")
-        config = body.config or _blank_config(body.name, body.role)
+        if body.role == "host" and not body.config:
+            config = _host_config_from_body(body)
+        else:
+            config = body.config or _blank_config(body.name, body.role)
         x, y = _placed(body, _store.lab)
         _store.lab.devices.append(
             Device(
@@ -213,9 +235,9 @@ def update_device(name: str, body: DeviceUpdate) -> dict:
         if device is None:
             raise HTTPException(404, "No such device")
         structural = False
-        if body.config is not None and body.config != device.config:
+        if body.config is not None and not same_displayed_config(device.config, body.config):
             push_config(device, device.config)
-            device.config = body.config
+            device.config = body.config.replace("\r\n", "\n")
             structural = True
         if body.neighborText is not None and body.neighborText != device.neighbor_text:
             device.neighbor_text = body.neighborText
@@ -272,36 +294,78 @@ def delete_link(link_id: str) -> dict:
 @app.post("/api/links/{link_id}/confirm")
 def confirm(link_id: str) -> dict:
     with _store.lock:
-        if confirm_link(_store.lab, link_id) is None:
+        link = next((item for item in _store.lab.links if item.id == link_id), None)
+        if link is None:
             raise HTTPException(404, "No such link")
-        _engine.recompute(_store.lab)
+        headline = (
+            f"Confirmed {link.a_device} {link.a_interface} - "
+            f"{link.b_device} {link.b_interface}."
+        )
+        extra = probes_for_interfaces(_store.lab, link.a_device, link.a_interface)
+        extra += probes_for_interfaces(_store.lab, link.b_device, link.b_interface)
+        notice = _summarize(
+            _store.lab,
+            lambda: confirm_link(_store.lab, link_id),
+            headline,
+            extra,
+        )
         _store.save()
-        return _payload()
+        payload = _payload()
+        payload["notice"] = notice
+        return payload
 
 
 @app.post("/api/links/{link_id}/unconfirm")
 def unconfirm(link_id: str) -> dict:
     with _store.lock:
-        outcome = unconfirm_link(_store.lab, link_id)
-        if outcome == "missing":
+        link = next((item for item in _store.lab.links if item.id == link_id), None)
+        if link is None:
             raise HTTPException(404, "No such link")
-        if outcome == "suggested":
-            apply_inference(_store.lab)
-            _engine.recompute(_store.lab)
-            _store.save()
+        if link.status == "suggested":
+            payload = _payload()
+            payload["unconfirm"] = "already"
+            return payload
+        headline = (
+            f"Suggested {link.a_device} {link.a_interface} - "
+            f"{link.b_device} {link.b_interface}."
+        )
+        extra = probes_for_interfaces(_store.lab, link.a_device, link.a_interface)
+        extra += probes_for_interfaces(_store.lab, link.b_device, link.b_interface)
+        notice = _summarize(
+            _store.lab,
+            lambda: unconfirm_link(_store.lab, link_id),
+            headline,
+            extra,
+        )
+        _store.save()
         payload = _payload()
-        payload["unconfirm"] = outcome
+        payload["unconfirm"] = "suggested"
+        payload["notice"] = notice
         return payload
 
 
 @app.post("/api/links/{link_id}/dismiss")
 def dismiss(link_id: str) -> dict:
     with _store.lock:
-        if not dismiss_link(_store.lab, link_id):
+        link = next((item for item in _store.lab.links if item.id == link_id), None)
+        if link is None:
             raise HTTPException(404, "No such link")
-        _engine.recompute(_store.lab)
+        headline = (
+            f"Rejected {link.a_device} {link.a_interface} - "
+            f"{link.b_device} {link.b_interface}."
+        )
+        extra = probes_for_interfaces(_store.lab, link.a_device, link.a_interface)
+        extra += probes_for_interfaces(_store.lab, link.b_device, link.b_interface)
+        notice = _summarize(
+            _store.lab,
+            lambda: dismiss_link(_store.lab, link_id),
+            headline,
+            extra,
+        )
         _store.save()
-        return _payload()
+        payload = _payload()
+        payload["notice"] = notice
+        return payload
 
 
 @app.post("/api/recompute")
@@ -337,6 +401,16 @@ def show(body: ShowIn) -> JSONResponse:
 _ROLES = {"router", "switch", "host"}
 
 
+def _summarize(lab, mutate, headline: str, extra: list) -> str:
+    """Same summary as a config edit. A down engine still applies the change."""
+    try:
+        return _engine.summarize_mutation(lab, mutate, headline, extra)
+    except EngineUnavailable as exc:
+        mutate()
+        _engine.recompute(lab)
+        return f"{headline}\n\n{exc}\n"
+
+
 def _placed(body: DeviceIn, lab) -> tuple[float, float]:
     if body.x is not None and body.y is not None:
         return body.x, body.y
@@ -348,19 +422,25 @@ def _placed(body: DeviceIn, lab) -> tuple[float, float]:
 
 
 def _blank_config(name: str, role: str) -> str:
-    if role == "host":
-        return (
-            f"hostname {name}\n"
-            "!\n"
-            "interface Ethernet0\n"
-            " description host port\n"
-            " ip address 10.0.0.50 255.255.255.0\n"
-            "!\n"
-            "ip default-gateway 10.0.0.1\n"
-            "!\n"
-            "end\n"
-        )
     return f"hostname {name}\n!\n"
+
+
+def _host_config_from_body(body: DeviceIn) -> str:
+    import ipaddress
+
+    if not body.ip.strip() or not body.mask.strip() or not body.gateway.strip():
+        raise HTTPException(400, "A host needs an IP address, a mask, and a gateway")
+    try:
+        ipaddress.ip_address(body.ip.strip())
+        if "/" in body.mask:
+            prefix = int(body.mask.strip().lstrip("/"))
+        elif body.mask.strip().isdigit():
+            prefix = int(body.mask.strip())
+        else:
+            prefix = ipaddress.IPv4Network(f"0.0.0.0/{body.mask.strip()}").prefixlen
+        return host_config(body.name, f"{body.ip.strip()}/{prefix}", body.gateway.strip())
+    except (ValueError, ipaddress.AddressValueError) as exc:
+        raise HTTPException(400, str(exc)) from None
 
 
 def _check_name(name: str) -> None:

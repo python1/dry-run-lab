@@ -34,8 +34,16 @@ export const api = {
     }>;
   },
   loadExample: () => request("/api/lab/load-example", { method: "POST" }),
-  addDevice: (body: { name: string; role: string; x?: number; y?: number; config?: string }) =>
-    request("/api/devices", { method: "POST", body: JSON.stringify(body) }),
+  addDevice: (body: {
+    name: string;
+    role: string;
+    x?: number;
+    y?: number;
+    config?: string;
+    ip?: string;
+    mask?: string;
+    gateway?: string;
+  }) => request("/api/devices", { method: "POST", body: JSON.stringify(body) }),
   updateDevice: (
     name: string,
     body: { config?: string; neighborText?: string; x?: number; y?: number },
@@ -52,8 +60,16 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ device, command }),
     });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.detail || "show failed");
+    const raw = await response.text();
+    let body: { detail?: string; text?: string; prompt?: string; lab?: Lab } = {};
+    if (raw) {
+      try {
+        body = JSON.parse(raw) as typeof body;
+      } catch {
+        throw new Error(raw.trim().slice(0, 300) || response.statusText || "show failed");
+      }
+    }
+    if (!response.ok) throw new Error(body.detail || raw.trim().slice(0, 300) || "show failed");
     return {
       text: body.text as string,
       prompt: (body.prompt as string) || `${device}#`,

@@ -170,9 +170,9 @@ def _vlan_acl_and_trunk(engine: Engine, lab) -> None:
     assert "line " not in lists
     running = _run(engine, lab, "R1", "show running-config")
     assert f" 25 {guest}" in running
-    assert " 10 deny" not in running
-    assert " 20 deny" not in running
-    assert " 30 permit" not in running
+    assert " 10 deny" in running
+    assert " 20 deny" in running
+    assert " 30 permit" in running
     reverted = _run(engine, lab, "R1", "revert")
     assert "Reverted one edit. Recomputed." in reverted
     assert "Applied 1 line" not in reverted
@@ -212,8 +212,7 @@ def _vlan_acl_and_trunk(engine: Engine, lab) -> None:
     assert lists.index("    30 permit ip any any") < lists.index(f"    40 {guest}")
     running = _run(engine, lab, "R1", "show running-config")
     assert guest in running
-    assert " 40 deny" not in running
-    assert f" 40 {guest}" not in running
+    assert f" 40 {guest}" in running
     still = _run(
         engine,
         lab,

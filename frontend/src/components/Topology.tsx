@@ -369,10 +369,12 @@ export function Topology({
                     <text x="16" y="18" fill="#f4ecda" fontSize="15" fontFamily="ui-monospace, monospace">
                       {short(iface.name)}
                     </text>
+                    <title>{`Click ${short(iface.name)}, then the other port, to cable`}</title>
+                    <circle cx={CARD_W - 18} cy="13" r="12" fill="transparent" />
                     <circle
                       cx={CARD_W - 18}
                       cy="13"
-                      r={armed ? 8 : 6}
+                      r={armed ? 10 : 9}
                       fill={armed ? "#e2a84a" : iface.shutdown ? "#e15b45" : "#8fbf78"}
                     />
                   </g>

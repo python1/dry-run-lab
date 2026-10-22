@@ -27,6 +27,7 @@ export interface Device {
   y: number;
   interfaces: Iface[];
   unsimulated: WarningRow[];
+  versionNote?: string;
 }
 
 export interface Link {
@@ -52,4 +53,5 @@ export interface Lab {
   unsimulatedCount: number;
   disclaimer: string;
   credit: string;
+  notice?: string;
 }

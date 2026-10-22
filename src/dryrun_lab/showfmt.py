@@ -27,12 +27,17 @@ _PROTOCOL = {
 
 
 def show_running_config(config: str, unsimulated: list[dict[str, Any]]) -> str:
+    from dryrun_lab.ioscheck import display_config, version_note
+
     missed = [row for row in unsimulated if row.get("kind") not in {"ignored", "limit", "unreachable"}]
     ignored = [row for row in unsimulated if row.get("kind") == "ignored"]
     unreachable = [row for row in unsimulated if row.get("kind") == "unreachable"]
     lines = [
         "! Loaded config. This is the text the lab simulated, not a live readout.",
     ]
+    note = version_note(config)
+    if note:
+        lines.append(f"! {note}")
     if missed:
         lines.append(
             f"! {len(missed)} line(s) were NOT simulated. "
@@ -47,7 +52,7 @@ def show_running_config(config: str, unsimulated: list[dict[str, Any]]) -> str:
             f"! {len(ignored)} line(s) ignored when ip routing is enabled."
         )
     lines.append("!")
-    body = config.replace("\r\n", "\n").rstrip()
+    body = display_config(config).replace("\r\n", "\n").rstrip()
     return "\n".join(lines + [body, ""])
 
 
@@ -217,6 +222,29 @@ def show_interfaces_trunk(rows: list[dict[str, Any]]) -> str:
     for row in trunks:
         allowed = row.get("allowed") or ""
         lines.append(f"{_short_interface(str(row.get('name') or '')):<18} {allowed}")
+    return "\n".join(lines) + "\n"
+
+
+def show_ip_ospf_neighbor(rows: list[dict[str, Any]]) -> str:
+    """IOS-like neighbor table built from computed OSPF sessions."""
+    lines = [
+        "Computed OSPF neighbors. Not a live router.",
+        f"{'Neighbor ID':<16}{'Pri':<6}{'State':<16}{'Address':<16}Interface",
+    ]
+    if not rows:
+        lines.append("  No OSPF neighbors were computed.")
+        return "\n".join(lines) + "\n"
+    ordered = sorted(rows, key=lambda row: (str(row.get("address") or ""), str(row.get("interface") or "")))
+    for row in ordered:
+        state = "FULL/  -" if str(row.get("status") or "").upper() == "ESTABLISHED" else str(row.get("status") or "-")
+        lines.append(
+            f"{str(row.get('router_id') or '-'):<16}"
+            f"{'-':<6}"
+            f"{state:<16}"
+            f"{str(row.get('address') or '-'):<16}"
+            f"{row.get('interface') or '-'}"
+        )
+    lines.append("Priority and dead time are not part of the computed session.")
     return "\n".join(lines) + "\n"
 
 
@@ -725,6 +753,57 @@ def _shared_network(link: Any) -> ipaddress.IPv4Network | None:
 _IP = re.compile(r"\d+\.\d+\.\d+\.\d+")
 
 
+_UNMODELED_SHOW = (
+    "show version",
+    "show ver",
+    "sh version",
+    "sh ver",
+    "show spanning-tree",
+    "sh spanning-tree",
+    "show ip arp",
+    "show arp",
+    "show mac address-table",
+    "show mac-address-table",
+    "show cdp neighbors",
+    "show cdp",
+    "show lldp neighbors",
+    "show lldp",
+    "show inventory",
+    "show processes",
+    "show users",
+    "show logging",
+    "show clock",
+    "show ip protocols",
+    "show ip bgp",
+    "show ip ospf interface",
+    "show ip ospf database",
+    "show interfaces status",
+    "show interface status",
+    "show ip interface",
+    "show interfaces",
+    "show interface",
+)
+
+
+def command_disposition(command: str) -> str:
+    """`modeled`, `unmodeled`, or `invalid` for an exec-mode command."""
+    folded = " ".join(command.strip().split()).lower()
+    if "|" in folded:
+        return "unmodeled"
+    if normalize_command(folded) is not None or folded in {
+        "show ip ospf neighbor",
+        "show ip ospf neighbors",
+        "sh ip ospf neighbor",
+        "sh ip ospf neighbors",
+    }:
+        return "modeled"
+    if folded in _UNMODELED_SHOW or any(folded.startswith(prefix + " ") for prefix in _UNMODELED_SHOW):
+        return "unmodeled"
+    if folded.startswith("show ") or folded.startswith("sh "):
+        return "unmodeled"
+    return "invalid"
+
+
 def normalize_command(command: str) -> str | None:
     folded = " ".join(command.strip().split()).lower()
     if "|" in folded:
@@ -760,6 +839,10 @@ def normalize_command(command: str) -> str | None:
         "show ip access-lists": "acl",
         "sh access-lists": "acl",
         "sh ip access-lists": "acl",
+        "show ip ospf neighbor": "ospf-neighbor",
+        "show ip ospf neighbors": "ospf-neighbor",
+        "sh ip ospf neighbor": "ospf-neighbor",
+        "sh ip ospf neighbors": "ospf-neighbor",
     }
     return table.get(folded)
 
@@ -773,14 +856,17 @@ def command_help() -> str:
         "  show vlan brief\n"
         "  show interfaces trunk\n"
         "  show access-lists\n"
+        "  show ip ospf neighbor\n"
         "  show warnings\n"
         "  ping DESTINATION [source ADDRESS] [ingress INTERFACE]\n"
         "  traceroute DESTINATION [source ADDRESS] [ingress INTERFACE]\n"
         "  configure terminal ... end\n"
         "  abort\n"
         "  revert\n"
-        "Ping, traceroute, and show results are computed. Pipes are not available.\n"
-        "revert restores the previous config on this device and recomputes.\n"
+        "Ping, traceroute, show ip ospf neighbor, and other show results are computed.\n"
+        "A show command this lab does not compute says it is not simulated in this version.\n"
+        "Pipes are not available.\n"
+        "revert undoes one configure terminal ... end block on this device and recomputes.\n"
     )
 
 

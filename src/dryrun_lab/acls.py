@@ -2,11 +2,12 @@
 
 Unnumbered lines already in a config are 10, 20, 30, and so on. A new line
 with no number is appended and gets the last sequence plus 10. A line that
-starts with a number is inserted at that sequence. Those numbers stay
-internal: `show access-lists` and the snapshot print them, and a drop is
-named by sequence. `show running-config` and the saved config keep a line
-unnumbered unless the user typed the number, resequence wrote new ones, or
-leaving the number off would assign a different sequence next time.
+starts with a number is inserted at that sequence. `show access-lists` and
+the snapshot always print the numbers, and a drop is named by sequence.
+`show running-config` prints a number on every entry from IOS-XE 16.12, and
+when the config has no version line. The saved config keeps a number when
+the user typed it, resequence wrote new ones, or leaving it off would assign
+a different sequence next time.
 """
 
 from __future__ import annotations
@@ -399,14 +400,21 @@ def _deny_endpoints(text: str) -> tuple[str, str] | None:
     )
     if match is None:
         return None
-    return _representative(match.group(1), match.group(2)), _representative(match.group(3), match.group(4))
+    src = _representative(match.group(1), match.group(2))
+    dst = _representative(match.group(3), match.group(4))
+    if src is None or dst is None:
+        return None
+    return src, dst
 
 
-def _representative(network: str, wildcard: str) -> str:
+def _representative(network: str, wildcard: str) -> str | None:
     import ipaddress
 
-    base = ipaddress.IPv4Address(network)
-    wild = int(ipaddress.IPv4Address(wildcard))
+    try:
+        base = ipaddress.IPv4Address(network)
+        wild = int(ipaddress.IPv4Address(wildcard))
+    except (ipaddress.AddressValueError, ValueError):
+        return None
     if wild == 0:
         return str(base)
     host = int(base) | (wild & 50)
