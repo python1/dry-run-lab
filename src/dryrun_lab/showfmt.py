@@ -666,6 +666,7 @@ def command_help() -> str:
         "  ping DESTINATION [source ADDRESS] [ingress INTERFACE]\n"
         "  traceroute DESTINATION [source ADDRESS] [ingress INTERFACE]\n"
         "  configure terminal ... end\n"
+        "  abort\n"
         "  revert\n"
         "Ping, traceroute, and show results are computed. Pipes are not available.\n"
         "revert restores the previous config on this device and recomputes.\n"

@@ -18,6 +18,7 @@ from dryrun_lab.configparse import canonical_interface, parse_config
 from dryrun_lab.constants import COMPUTED_TAG, ENGINE_HOST, ENGINE_PORT
 from dryrun_lab.facts import annotate_warnings
 from dryrun_lab.hosts import host_document, host_limits
+from dryrun_lab.infer import endpoint_key
 from dryrun_lab.l2path import layer2_note
 from dryrun_lab.paths import data_home
 from dryrun_lab.probes import Probe, probes_for_acl, probes_for_lab
@@ -54,6 +55,7 @@ class ShowResult:
     text: str
     prompt: str
     changed: bool = False
+    ok: bool = True
 
 
 class Engine:
@@ -147,16 +149,18 @@ class Engine:
         texts: list[str] = []
         prompt = f"{device.name}#"
         changed = False
+        ok = True
         for piece in pieces:
-            prompt, text, piece_changed = self._dispatch(lab, device, piece)
+            prompt, text, piece_changed, piece_ok = self._dispatch(lab, device, piece)
             changed = changed or piece_changed
+            ok = ok and piece_ok
             if text:
                 texts.append(text)
         if not texts:
             texts.append(_wrap(device.name, command, ""))
-        return ShowResult("\n".join(texts), prompt, changed)
+        return ShowResult("\n".join(texts), prompt, changed, ok)
 
-    def _dispatch(self, lab: Lab, device: Any, command: str) -> tuple[str, str, bool]:
+    def _dispatch(self, lab: Lab, device: Any, command: str) -> tuple[str, str, bool, bool]:
         key = device.name.lower()
         folded = " ".join(command.strip().split()).lower()
         draft = self._drafts.get(key)
@@ -168,11 +172,13 @@ class Engine:
             text = _wrap(
                 device.name,
                 command,
-                "Enter configuration commands, one per line. End with END.\n",
+                "Enter configuration commands, one per line. End with CNTL/Z.\n",
+                prompt=enable,
+                computed=False,
             )
-            return f"{device.name}(config)#", text, False
+            return f"{device.name}(config)#", text, False, True
         if folded in {"revert", "rollback"}:
-            return enable, self._revert(lab, device, command), True
+            return enable, self._revert(lab, device, command), True, True
         flow = parse_flow(command)
         if flow is not None:
             self._ensure_ready(lab)
@@ -183,23 +189,23 @@ class Engine:
                 command,
                 formatter(str(flow["dst"]), flow["src"], flow["ingress"], body, drop),
             )
-            return enable, text, False
+            return enable, text, False, True
         kind = normalize_command(command)
         if kind is None:
             if "|" in command:
                 detail = "% Pipes are not simulated in this version.\n\n" + command_help()
             else:
                 detail = "% Unrecognized command.\n\n" + command_help()
-            return enable, _wrap(device.name, command, detail), False
+            return enable, _wrap(device.name, command, detail), False, False
         if kind == "running-config":
             rows = [row for row in lab.warnings if row.get("device") == device.name]
-            return enable, _wrap(device.name, command, show_running_config(device.config, rows)), False
+            return enable, _wrap(device.name, command, show_running_config(device.config, rows)), False, True
         if kind == "warnings":
             rows = [row for row in lab.warnings if row.get("device") == device.name]
-            return enable, _wrap(device.name, command, show_unsimulated(device.name, rows)), False
+            return enable, _wrap(device.name, command, show_unsimulated(device.name, rows)), False, True
         if kind == "acl":
             rows = self._interfaces.get(key, [])
-            return enable, _wrap(device.name, command, show_access_lists(device.config, rows)), False
+            return enable, _wrap(device.name, command, show_access_lists(device.config, rows)), False, True
         self._ensure_ready(lab)
         if kind == "interfaces":
             body = show_ip_interface_brief(self._interfaces.get(key, []))
@@ -209,7 +215,7 @@ class Engine:
             body = show_interfaces_trunk(self._interfaces.get(key, []))
         else:
             body = show_ip_route(self._routes.get(key, []))
-        return enable, _wrap(device.name, command, body), False
+        return enable, _wrap(device.name, command, body), False, True
 
     def _client(self) -> Any:
         if self._session is not None:
@@ -231,29 +237,62 @@ class Engine:
             raise EngineUnavailable(lab.engine_error)
         raise EngineUnavailable("Nothing has been computed yet.")
 
-    def _config_line(self, lab: Lab, device: Any, command: str, draft: list[str]) -> tuple[str, str, bool]:
+    def _config_line(self, lab: Lab, device: Any, command: str, draft: list[str]) -> tuple[str, str, bool, bool]:
         key = device.name.lower()
         folded = " ".join(command.strip().split()).lower()
         enable = f"{device.name}#"
+        current = prompt_for(device.name, draft)
+        if "|" in command:
+            detail = "% Pipes are not simulated in this version.\n\n" + command_help()
+            return current, _wrap(device.name, command, detail, prompt=current), False, False
         if folded == "abort":
             self._drafts.pop(key, None)
-            return enable, _wrap(device.name, command, "Configuration aborted. Nothing was applied.\n"), False
+            return (
+                enable,
+                _wrap(
+                    device.name,
+                    command,
+                    "Configuration aborted. Nothing was applied.\n",
+                    prompt=current,
+                    computed=False,
+                ),
+                False,
+                True,
+            )
         if folded == "end" or (folded == "exit" and _config_depth(draft) == 1):
             lines = list(draft)
             self._drafts.pop(key, None)
             body = self._apply(lab, device, lines)
-            return enable, _wrap(device.name, command, body), True
+            computed = not body.startswith("No configuration changes")
+            return enable, _wrap(device.name, command, body, prompt=current, computed=computed), True, True
         if folded in {"revert", "rollback"}:
-            return prompt_for(device.name, draft), _wrap(
-                device.name,
-                command,
-                "Leave configuration mode before revert.\n",
-            ), False
+            return (
+                current,
+                _wrap(
+                    device.name,
+                    command,
+                    "Leave configuration mode before revert.\n",
+                    prompt=current,
+                    computed=False,
+                ),
+                False,
+                True,
+            )
         if folded == "exit":
             draft.append("exit")
-            return prompt_for(device.name, draft), _wrap(device.name, command, ""), False
+            return (
+                prompt_for(device.name, draft),
+                _wrap(device.name, command, "", prompt=current, computed=False),
+                False,
+                True,
+            )
         draft.append(command.strip())
-        return prompt_for(device.name, draft), _wrap(device.name, command, ""), False
+        return (
+            prompt_for(device.name, draft),
+            _wrap(device.name, command, "", prompt=current, computed=False),
+            False,
+            True,
+        )
 
     def _revert(self, lab: Lab, device: Any, command: str) -> str:
         history = device.config_history
@@ -486,11 +525,7 @@ class Engine:
             (configs / f"{safe}.cfg").write_text(numbered_config(device.config), encoding="utf-8")
         if not wrote_host and hosts.exists():
             shutil.rmtree(hosts)
-        edges = []
-        for link in lab.links:
-            if link.status != "confirmed":
-                continue
-            edges.append(_edge(link))
+        edges = [_edge(link) for link in _layer1_links(lab)]
         topo_dir = root / "batfish"
         topo_dir.mkdir()
         (topo_dir / "layer1_topology.json").write_text(
@@ -500,8 +535,19 @@ class Engine:
         return root
 
 
-def _wrap(device: str, command: str, body: str) -> str:
-    return f"{device}# {command.strip()}\n{COMPUTED_TAG}\n\n{body}"
+def _wrap(
+    device: str,
+    command: str,
+    body: str,
+    *,
+    prompt: str | None = None,
+    computed: bool = True,
+) -> str:
+    shown = prompt or f"{device}#"
+    head = f"{shown} {command.strip()}\n"
+    if not computed:
+        return head + body
+    return f"{head}{COMPUTED_TAG}\n\n{body}"
 
 
 def _safe_name(name: str) -> str:
@@ -539,6 +585,37 @@ def _mark_link_state(lab: Lab, interfaces: dict[str, list[dict[str, Any]]]) -> N
             if parsed is not None and parsed.shutdown:
                 down = True
         link.down = down
+
+
+def _layer1_links(lab: Lab) -> list[Link]:
+    """Edges written into the layer-1 file.
+
+    Confirmed cables are edges. A suggested /30 or /31 between two physical
+    interfaces is also an edge, unless `unconfirm` withdrew it. Suggested
+    trunks and host cables are not. Writing the point-to-point edge keeps
+    that adjacency when some other cable is confirmed. An empty file makes
+    the engine hub every physical interface together, which is a different
+    path and is not a reading of the suggestion list.
+    """
+    withdrawn = set(lab.withdrawn)
+    chosen: list[Link] = []
+    seen: set[str] = set()
+    for link in lab.links:
+        key = endpoint_key(link.a_device, link.a_interface, link.b_device, link.b_interface)
+        if key in seen:
+            continue
+        if link.status == "confirmed" or (_point_to_point_subnet(link) and key not in withdrawn):
+            seen.add(key)
+            chosen.append(link)
+    return chosen
+
+
+def _point_to_point_subnet(link: Link) -> bool:
+    sources = {part for part in link.source.split("+") if part}
+    if "subnet" not in sources:
+        return False
+    match = re.search(r"/(\d+)\b", link.reason)
+    return bool(match and int(match.group(1)) >= 30)
 
 
 def _edge(link: Link) -> dict[str, Any]:

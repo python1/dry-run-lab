@@ -6,7 +6,41 @@ Dry Run Lab is a local simulator for a small vendor-style network. You draw rout
 
 Computed results are a simulation from these configs. They are not proof that a live network will behave the same way. Not affiliated with or endorsed by Cisco.
 
+## Get the code
+
+The checkout is the directory that contains `ensure-running`, `bin/dryrun-lab`, and `examples/office-lab`.
+
+When you can clone the repository:
+
+```bash
+git clone https://github.com/python1/dry-run-lab.git
+cd dry-run-lab
+```
+
+The branch is `main`.
+
+When you cannot clone, download a source archive of `main` and unpack it. On GitHub that is Code, then Download ZIP, or the branch tarball:
+
+```bash
+curl -L -o dry-run-lab-main.tar.gz https://github.com/python1/dry-run-lab/archive/refs/heads/main.tar.gz
+tar -xzf dry-run-lab-main.tar.gz
+cd dry-run-lab-main
+```
+
+The same kind of archive is attached to a release when one is published (Source code zip or tar.gz). The archive contains the example configs and the built page. It does not contain a virtualenv or the analysis engine.
+
+A GitHub source archive is produced by `git archive`, which stamps the commit into the tree. A folder of loose files, copied one by one, has no `.git` directory and no stamp.
+
 ## Run it
+
+`./ensure-running` uses `sudo` and `apt` to install packages system-wide when they are missing:
+
+- OpenJDK 21 (`openjdk-21-jre-headless`), if `java` is missing or older than 21
+- `curl`, if it is missing
+- `python3-venv`, if `ensurepip` is missing
+- `ca-certificates`, if the system bundle is missing
+
+It then downloads the Batfish jar, question templates, and the matching pybatfish wheel from one pinned Docker Hub image layer, creates a virtualenv, and installs those into it. If the Java process does not open port 9996, it installs `docker.io` and starts the official `batfish/allinone:v2026.08.27` image. Nothing is uploaded. It does not use systemd.
 
 From a clean Debian or Ubuntu box, with `sudo` and outbound HTTPS:
 
@@ -30,9 +64,11 @@ Open that URL on the same machine. The server listens on `127.0.0.1` only. The p
 
 Run `./ensure-running` again after a computer restart, and after an Update Bot's Computer wipe. If the engine is already up and a saved lab has not been computed in this process, the script reloads that lab and recomputes. You do not have to load the lab by hand before show commands work.
 
-A virtualenv under `$DRYRUN_HOME` (default `$HOME/.local/share/dryrun-lab`) is reused when it matches the pinned requirements and the same Python interpreter. Those runs do not contact the package index. If that Python is missing or has changed, the virtualenv is created again. A home-folder virtualenv can survive a wipe while the interpreter it points at does not.
+`DRYRUN_HOME` overrides the data directory for that command. `./ensure-running` records the directory it actually used in `.dryrun-home` in the checkout and in `$XDG_CONFIG_HOME/dryrun-lab/install-path` (`~/.config/dryrun-lab/install-path` when `XDG_CONFIG_HOME` is unset). Later shells do not need `DRYRUN_HOME`. `bin/dryrun-lab` reads the override, then the checkout record, then the user record, then `$HOME/.local/share/dryrun-lab`.
 
-Data, the jar, and the virtualenv live in `$DRYRUN_HOME`. Logs are `ensure.log`, `batfish.log`, and `server.log` in that directory.
+A virtualenv under that directory is reused when it matches the pinned requirements and the same Python interpreter. Those runs do not contact the package index. If that Python is missing or has changed, the virtualenv is created again. A home-folder virtualenv can survive a wipe while the interpreter it points at does not.
+
+Data, the jar, and the virtualenv live in that directory. Logs are `ensure.log`, `batfish.log`, and `server.log` there.
 
 ## Shell
 
@@ -45,6 +81,7 @@ bin/dryrun-lab links
 bin/dryrun-lab confirm LINK_ID
 bin/dryrun-lab dismiss LINK_ID
 bin/dryrun-lab warnings
+bin/dryrun-lab status
 bin/dryrun-lab show R1 "show ip route"
 bin/dryrun-lab show R1 "show ip interface brief"
 bin/dryrun-lab show R1 "show running-config"
@@ -52,16 +89,39 @@ bin/dryrun-lab show SW1 "show vlan brief"
 bin/dryrun-lab show SW1 "show interfaces trunk"
 bin/dryrun-lab show R1 "show access-lists"
 bin/dryrun-lab show R1 "ping 10.10.10.1"
+bin/dryrun-lab show R1 "ping 10.99.0.1 source 10.30.30.50 ingress GigabitEthernet0/0.30"
 bin/dryrun-lab show R1 "traceroute 10.255.1.1 source 10.50.0.1"
 bin/dryrun-lab host list
 bin/dryrun-lab link list
 ```
 
-The CLI only talks to `127.0.0.1` or `localhost`. It reads config files locally and posts the text to the lab. Each show, ping, and traceroute transcript is tagged `[computed]`. `bin/dryrun-lab --help` and `bin/dryrun-lab load` print the full limit. Other commands do not repeat it. The same limit stays in the lab banner.
+`status` prints whether the engine is up, the lab name, and the device, link, and warning counts.
 
-`bin/dryrun-lab --version` prints the build commit, for example `dryrun-lab <commit>`. The same stamp is the first line of each `ensure-running` log and sits next to the credit in the page footer. A checkout uses `git rev-parse`, and adds `-dirty` when the work tree has changes. A packaged tree with no `.git` uses the commit written into the package. If neither is available, the stamp is `unknown`.
+The CLI only talks to `127.0.0.1` or `localhost`. It reads config files locally and posts the text to the lab. Show, ping, and traceroute transcripts are tagged `[computed]`. Lines typed in config mode are not. `bin/dryrun-lab --help` and `bin/dryrun-lab load` print the full limit. Other commands do not repeat it. The same limit stays in the lab banner. An unknown command, or a command with a pipe, is refused and the CLI exits non-zero.
 
-`configure terminal` edits that device's config. `end` recomputes and prints what changed in routes, warnings, and reachability. `abort` discards the lines. `revert` undoes one edit on that device and recomputes. Call it again to undo the edit before that. The transcript says `Reverted one edit. Recomputed.` The same commands work in the page's device CLI.
+`bin/dryrun-lab --version` prints the build commit, for example `dryrun-lab 7a7dd64`. The same stamp is the first line of each `ensure-running` log and sits next to the credit in the page footer. A checkout uses `git rev-parse`, and adds `-dirty` when the work tree has changes. A GitHub source archive (or any `git archive`) has no `.git` directory; the commit is written into `src/dryrun_lab/version.py` when the archive is built. A folder of loose files, with the placeholder still in that file and no `.git` directory, prints `dryrun-lab unknown`.
+
+`configure terminal` edits that device's config. The prompt becomes `R1(config)#`, then `R1(config-if)#`, `R1(config-ext-nacl)#`, `R1(config-std-nacl)#`, `R1(config-vlan)#`, or `R1(config-router)#` in those sub-modes. The banner says `End with CNTL/Z.` `end` recomputes and prints what changed in routes, warnings, and reachability, tagged `[computed]`. `abort` discards the lines and does not recompute. `revert` undoes one edit on that device and recomputes. Call it again to undo the edit before that. The transcript says `Reverted one edit. Recomputed.` A second `revert` with nothing left says `Nothing to revert on this device.` The same commands work in the page's device CLI.
+
+An inbound ACL is tested with `source` and `ingress`. The source is a host in the denied subnet, and `ingress` is the interface where the ACL is applied inbound. A ping that starts on the router itself does not pass through that inbound list.
+
+The reachability block after `end` or `revert` may use a sample host, such as `10.99.0.50`, instead of a configured address such as `10.99.0.1`. The line says so. A trace to the configured address stops on the device that owns it. The sample is another host on that subnet, so the check can show whether traffic is delivered or denied.
+
+To check that a revert restored a device, save `show running-config` (and the ping you care about) before the edit, revert, then run the same commands and diff them. Matching output means that device is back where it was. `status`, `links`, and `warnings` cover the rest of the lab.
+
+```bash
+bin/dryrun-lab show R1 "show running-config" > /tmp/r1-before.txt
+bin/dryrun-lab show R1 "ping 10.99.0.1 source 10.30.30.50 ingress GigabitEthernet0/0.30" > /tmp/ping-before.txt
+bin/dryrun-lab show R1 $'configure terminal\nip access-list extended GUEST-IN\n25 deny ip 10.30.30.0 0.0.0.255 10.99.0.0 0.0.0.255\nend'
+bin/dryrun-lab show R1 "show access-lists"
+bin/dryrun-lab show R1 "ping 10.99.0.1 source 10.30.30.50 ingress GigabitEthernet0/0.30"
+bin/dryrun-lab show R1 $'configure terminal\nip access-list extended GUEST-IN\n26 deny ip 10.30.30.0 0.0.0.255 10.99.0.0 0.0.0.255\nabort'
+bin/dryrun-lab show R1 revert
+bin/dryrun-lab show R1 "show running-config" > /tmp/r1-after.txt
+diff -u /tmp/r1-before.txt /tmp/r1-after.txt
+```
+
+`abort` prints `Configuration aborted. Nothing was applied.` The sequence typed before `abort` is not in `show access-lists`. `25` is inserted between the existing sequence 20 and sequence 30. A line without a number is appended instead.
 
 ```bash
 bin/dryrun-lab show R1 $'configure terminal\ninterface GigabitEthernet0/0\n shutdown\nend'
@@ -83,7 +143,13 @@ bin/dryrun-lab link delete LINK_ID
 bin/dryrun-lab host delete PC40
 ```
 
-`link add` writes a confirmed cable. `links` lists suggestions too. `confirm LINK_ID` accepts a suggestion. `link unconfirm LINK_ID` sets a confirmed cable back to suggested, so it is no longer used for layer 1. A cable you drew stays in the list. A cable the lab inferred shows up again as a suggestion. If the cable is already suggested, the command says so and exits cleanly. `dismiss LINK_ID` rejects one so it is not inferred again. Only a confirmed cable is written into the layer-1 topology. A host ping uses those confirmed cables. A suggested cable is not enough, so confirm the path before the ping.
+`link add` writes a confirmed cable. `links` lists suggestions too. `confirm LINK_ID` accepts a suggestion. `link unconfirm LINK_ID` sets a confirmed cable back to suggested and withdraws it from the layer-1 file. A cable you drew stays in the list. A cable the lab inferred shows up again as a suggestion. If the cable is already suggested, the command says so and exits cleanly. `dismiss LINK_ID` rejects one so it is not inferred again.
+
+What is actually connected:
+
+- A confirmed cable is a layer-1 edge. Suggested trunks, access ports, and host cables are not. A host ping uses confirmed cables, including the ones `link add` created. Confirm the office trunks on that path before the ping. The layer-2 line under a host trace walks confirmed cables only. A host with no confirmed link is labeled **Not modeled**.
+- A shared `/30` or `/31` with exactly two physical interfaces is also written while that cable is still suggested. The office OSPF link (`10.50.0.0/30`, R1 Gi0/2 to SW1 Gi1/0/24) is one of these, so OSPF and `traceroute 10.255.1.1 source 10.50.0.1` succeed before you confirm it. Confirming another cable, including the R1–SW1 trunk, does not remove it. `unconfirm` withdraws that edge after the cable has been confirmed. While it is still only suggested, `unconfirm` leaves the edge in place and `dismiss` removes the suggestion. If that was the only layer-1 edge, the file is empty again and the hub below can reconnect those interfaces.
+- While the layer-1 file has no edges, the engine does not read the suggestion list. It treats physical interfaces as if they shared one hub, so other shared subnets can look adjacent too. That is a fallback for an empty file, not a confirmed cable. A ping whose source and destination are both addresses on the same device, such as `ping 10.20.20.1 source 10.10.10.50 ingress GigabitEthernet0/0.10` on R1, does not use a cable at all.
 
 Ping and traceroute print one sentence under the disposition. A drop names the ACL and its sequence number. When the trace starts on a host, a following line lists the layer-2 path across confirmed links and computed VLAN membership. Switches on that line are not hops in the computed trace. A shut or down cable is drawn red and dashed after the next recompute. A host with no address, no gateway, or no confirmed link is labeled **Not modeled**.
 
@@ -129,7 +195,9 @@ GitHub release `v2026.08.27` publishes no jar, and Maven Central has no `org.bat
 
 Plain Java is the runtime that works here. The bytecode in that layer is Java 21, the host OpenJDK 21 starts it, and the office lab computes. `ensure-running` starts the official container `batfish/allinone:v2026.08.27` only if that Java process does not open port 9996, and it logs that tag. The container path was not needed for stage 1.
 
-After `ensure-running` and a load of the office lab, the Java process used 476 MB resident (`VmRSS` 486,976 kB) and a high-water mark of 505 MB (`VmHWM` 516,680 kB). The virtual size was about 5.5 GB of address space. The heap cap is 2 GB.
+The Java process uses `-Xms256m` and `-Xmx2g`. The 2 GB figure is the heap cap, not the memory in use. Resident size moves as the process computes, and the JVM does not always return heap to the OS. Virtual size is address space, about 5.6 GB here, and is not the RAM in use.
+
+One measurement just after a first office-lab load was 476 MB resident (`VmRSS` 486,976 kB) with a high-water mark of 505 MB (`VmHWM` 516,680 kB). That is not a steady figure. The same process keeps heap it has already touched. After further office-lab computes and the test suite, one process here was at `VmRSS` 1,128,924 kB (about 1.1 GB) with a high-water mark of `VmHWM` 1,476,420 kB (about 1.4 GB). A separate longer session was about 916 MB. All of those are under the 2 GB heap cap.
 
 ## Layout
 

@@ -15,6 +15,16 @@ When a lab is saved and nothing has been computed yet, reload that
 lab and recompute once the analysis engine is up. Safe to run again.
 No systemd.
 
+Uses sudo and apt to install OpenJDK 21 (openjdk-21-jre-headless)
+system-wide when java is missing or older than 21. Also installs
+curl, python3-venv, and ca-certificates when those are missing.
+Downloads the Batfish jar, question templates, and the matching
+client wheel, then creates a virtualenv. If Java does not open
+port 9996, installs docker.io and starts the official image.
+
+DRYRUN_HOME overrides the data directory for this run. The path
+that is used is recorded for later shells.
+
 Run this after a computer restart and after an Update Bot's Computer
 wipe. A virtualenv left in the home folder is recreated when its
 Python interpreter is missing or no longer matches.
@@ -33,10 +43,13 @@ EOF
 done
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=bin/dryrun-home.sh
+source "$ROOT/bin/dryrun-home.sh"
 export DRYRUN_REPO="$ROOT"
-export DRYRUN_HOME="${DRYRUN_HOME:-$HOME/.local/share/dryrun-lab}"
+export DRYRUN_HOME="$(dryrun_resolve_home "$ROOT")"
 DATA="$DRYRUN_HOME"
 mkdir -p "$DATA"
+dryrun_record_home "$ROOT" "$DATA"
 LOG="$DATA/ensure.log"
 touch "$LOG"
 

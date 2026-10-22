@@ -71,6 +71,74 @@ def test_snapshot_writes_hosts_and_only_confirmed_edges(tmp_path, monkeypatch) -
     assert edges[0]["node2"]["interfaceName"] == "GigabitEthernet0/12"
 
 
+def test_suggested_point_to_point_is_written_and_unconfirm_withdraws_it(tmp_path, monkeypatch) -> None:
+    from dryrun_lab.store import Link, confirm_link, lab_from_dict, lab_to_dict, unconfirm_link
+
+    monkeypatch.setenv("DRYRUN_HOME", str(tmp_path))
+    lab = Lab()
+    lab.devices.append(Device(name="R1", role="router", config="hostname R1\n!\nend\n"))
+    lab.devices.append(Device(name="SW1", role="switch", config="hostname SW1\n!\nend\n"))
+    lab.links.append(
+        Link(
+            id="p2p",
+            a_device="R1",
+            a_interface="GigabitEthernet0/2",
+            b_device="SW1",
+            b_interface="GigabitEthernet1/0/24",
+            status="suggested",
+            source="description+subnet",
+            reason="shared subnet 10.50.0.0/30",
+        )
+    )
+    lab.links.append(
+        Link(
+            id="trunk",
+            a_device="R1",
+            a_interface="GigabitEthernet0/0",
+            b_device="SW1",
+            b_interface="GigabitEthernet1/0/1",
+            status="suggested",
+            source="description",
+            reason="description on R1 GigabitEthernet0/0",
+        )
+    )
+    lab.links.append(
+        Link(
+            id="wide",
+            a_device="R1",
+            a_interface="GigabitEthernet0/0.99",
+            b_device="SW1",
+            b_interface="Vlan99",
+            status="suggested",
+            source="subnet",
+            reason="shared subnet 10.99.0.0/24",
+        )
+    )
+    engine = Engine(network="dryrun-test-l1p2p")
+    edges = _edges(engine, lab)
+    assert len(edges) == 1
+    assert edges[0]["node1"]["interfaceName"] == "GigabitEthernet0/2"
+    assert edges[0]["node2"]["interfaceName"] == "GigabitEthernet1/0/24"
+
+    confirm_link(lab, "p2p")
+    unconfirm_link(lab, "p2p")
+    assert lab.links[0].status == "suggested"
+    assert lab.withdrawn
+    restored = lab_from_dict(lab_to_dict(lab))
+    assert restored.withdrawn == lab.withdrawn
+    assert _edges(engine, restored) == []
+
+    confirm_link(restored, "p2p")
+    again = _edges(engine, restored)
+    assert len(again) == 1
+    assert again[0]["node1"]["interfaceName"] == "GigabitEthernet0/2"
+
+
+def _edges(engine: Engine, lab: Lab) -> list:
+    root = engine._write_snapshot(lab)
+    return json.loads((root / "batfish" / "layer1_topology.json").read_text(encoding="utf-8"))["edges"]
+
+
 def test_layer2_note_names_switches_and_stops_on_a_down_link() -> None:
     lab = Lab()
     lab.devices.extend(

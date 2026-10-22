@@ -49,6 +49,50 @@ def test_unconfirm_of_a_confirmed_link_reports_the_change(capsys: pytest.Capture
     assert capsys.readouterr().out.strip() == "suggested abc"
 
 
+def test_show_exits_nonzero_when_the_command_is_refused(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_request(base: str, method: str, path: str, body: dict | None = None) -> dict:
+        assert method == "POST"
+        assert path == "/api/show"
+        assert body == {"device": "R1", "command": "frobnicate"}
+        return {"text": "R1# frobnicate\n[computed]\n\n% Unrecognized command.\n", "ok": False, "prompt": "R1#"}
+
+    monkeypatch.setattr("dryrun_lab.cli._request", fake_request)
+    assert main(["show", "R1", "frobnicate"]) == 1
+    assert "Unrecognized command" in capsys.readouterr().out
+
+
+def test_show_exits_nonzero_when_a_pipe_is_refused(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_request(base: str, method: str, path: str, body: dict | None = None) -> dict:
+        return {"text": "% Pipes are not simulated in this version.\n", "ok": False}
+
+    monkeypatch.setattr("dryrun_lab.cli._request", fake_request)
+    assert main(["show", "R1", "show ip route | include 10"]) == 1
+    assert "Pipes" in capsys.readouterr().out
+
+
+def test_show_exits_zero_when_ok_is_missing_or_true(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answers = iter(
+        [
+            {"text": "R1# show running-config\n[computed]\n\nhostname R1\n"},
+            {"text": "R1# show running-config\n[computed]\n\nhostname R1\n", "ok": True},
+        ]
+    )
+
+    def fake_request(base: str, method: str, path: str, body: dict | None = None) -> dict:
+        return next(answers)
+
+    monkeypatch.setattr("dryrun_lab.cli._request", fake_request)
+    assert main(["show", "R1", "show running-config"]) == 0
+    assert main(["show", "R1", "show running-config"]) == 0
+    assert "[computed]" in capsys.readouterr().out
+
+
 def test_help_keeps_the_full_disclaimer(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as caught:
         main(["--help"])

@@ -13,3 +13,4 @@ agent-tools/
 dist/
 *.tsbuildinfo
 .dryrun/
+.dryrun-home

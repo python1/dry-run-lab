@@ -71,6 +71,34 @@ def test_clean_git_stamp_has_no_dirty_flag(monkeypatch: pytest.MonkeyPatch, tmp_
     assert version() == "def5678"
 
 
+def test_git_archive_stamps_the_commit() -> None:
+    probe = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        text=True,
+    )
+    if probe.returncode != 0 or probe.stdout.strip() != "true":
+        pytest.skip("no git checkout")
+    attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert "src/dryrun_lab/version.py export-subst" in attributes
+    sha = subprocess.check_output(
+        ["git", "-C", str(ROOT), "rev-parse", "--short=7", "HEAD"],
+        text=True,
+    ).strip()
+    archive = subprocess.check_output(
+        ["git", "-C", str(ROOT), "archive", "--format=tar", "HEAD", "src/dryrun_lab/version.py"],
+    )
+    import io
+    import tarfile
+
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as packed:
+        member = packed.extractfile("src/dryrun_lab/version.py")
+        assert member is not None
+        text = member.read().decode("utf-8")
+    assert '_EMBEDDED = "$Format:%h$"' not in text
+    assert f'_EMBEDDED = "{sha}"' in text
+
+
 def test_unknown_when_there_is_no_stamp_and_no_git(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(version_mod, "_EMBEDDED", "$Format:%h$")
     monkeypatch.setattr(version_mod, "_repo_root", lambda: None)

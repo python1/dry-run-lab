@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Repo wrapper. ensure-running installs the real entrypoint into the data venv.
+# DRYRUN_HOME overrides the recorded install location.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DATA="${DRYRUN_HOME:-$HOME/.local/share/dryrun-lab}"
+# shellcheck source=bin/dryrun-home.sh
+source "$ROOT/bin/dryrun-home.sh"
+DATA="$(dryrun_resolve_home "$ROOT")"
 if [[ -x "$DATA/venv/bin/dryrun-lab" ]]; then
   export DRYRUN_REPO="${DRYRUN_REPO:-$ROOT}"
   export DRYRUN_HOME="$DATA"
