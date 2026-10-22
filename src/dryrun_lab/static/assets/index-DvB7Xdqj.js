@@ -38,23 +38,23 @@ ${u.current}`)};g.writeln("Device CLI"),g.writeln("show vlan brief    show inter
     margin-right: `).concat(h,"px ").concat(C,`;
     `),x==="padding"&&"padding-right: ".concat(h,"px ").concat(C,";")].filter(Boolean).join(""),`
   }
-  
+
   .`).concat(Fl,` {
     right: `).concat(h,"px ").concat(C,`;
   }
-  
+
   .`).concat(Gl,` {
     margin-right: `).concat(h,"px ").concat(C,`;
   }
-  
+
   .`).concat(Fl," .").concat(Fl,` {
     right: 0 `).concat(C,`;
   }
-  
+
   .`).concat(Gl," .").concat(Gl,` {
     margin-right: 0 `).concat(C,`;
   }
-  
+
   body[`).concat(Zs,`] {
     `).concat(n1,": ").concat(h,`px;
   }
