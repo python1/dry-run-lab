@@ -94,7 +94,8 @@ export function DeviceCli({ device, onLab }: { device: string | null; onLab?: (l
     };
     term.writeln("Device CLI");
     term.writeln("show vlan brief    show interfaces trunk    show access-lists");
-    term.writeln("ping    traceroute    configure terminal    revert");
+    term.writeln("show ip ospf neighbor    ping    traceroute    configure terminal    revert");
+    term.writeln("A show command this lab does not compute says it is not simulated.");
     term.writeln("Lines stay intact. Scroll sideways for the rest.");
     if (!device) term.writeln("Select a device first.");
     prompt();

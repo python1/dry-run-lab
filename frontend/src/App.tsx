@@ -39,6 +39,10 @@ export default function App() {
   const [addOpen, setAddOpen] = useState(false);
   const [addRole, setAddRole] = useState<Role>("router");
   const [addName, setAddName] = useState("");
+  const [addIp, setAddIp] = useState("");
+  const [addMask, setAddMask] = useState("");
+  const [addGateway, setAddGateway] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
   const [fitNonce, setFitNonce] = useState(0);
   const [terminalHeight, setTerminalHeight] = useState(readSplit);
   const [stamp, setStamp] = useState("");
@@ -56,7 +60,9 @@ export default function App() {
     setBusy(true);
     setError(null);
     try {
-      setLab(await action());
+      const next = await action();
+      if (next.notice) setNotice(next.notice);
+      setLab(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
     } finally {
@@ -143,6 +149,17 @@ export default function App() {
           {error || lab?.engineError}
         </div>
       )}
+      {notice && (
+        <div className="border-b border-steel/40 bg-steel/10 px-4 py-2">
+          <div className="mb-1 flex items-center justify-between gap-3">
+            <h2 className="text-xs uppercase tracking-wider text-steel">Topology change</h2>
+            <button type="button" className="text-xs text-muted" onClick={() => setNotice(null)}>
+              Dismiss
+            </button>
+          </div>
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap font-mono text-xs text-paper">{notice}</pre>
+        </div>
+      )}
       <nav className="flex gap-1 border-b border-line px-2 py-1 lg:hidden">
         {(["canvas", "devices", "config", "cli"] as Tab[]).map((item) => (
           <button
@@ -184,6 +201,9 @@ export default function App() {
               onClick={() => {
                 setAddRole("router");
                 setAddName("");
+                setAddIp("");
+                setAddMask("");
+                setAddGateway("");
                 setAddOpen(true);
               }}
             >
@@ -195,6 +215,9 @@ export default function App() {
               onClick={() => {
                 setAddRole("switch");
                 setAddName("");
+                setAddIp("");
+                setAddMask("");
+                setAddGateway("");
                 setAddOpen(true);
               }}
             >
@@ -206,6 +229,9 @@ export default function App() {
               onClick={() => {
                 setAddRole("host");
                 setAddName("");
+                setAddIp("");
+                setAddMask("");
+                setAddGateway("");
                 setAddOpen(true);
               }}
             >
@@ -321,6 +347,9 @@ export default function App() {
           </div>
           {device ? (
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto px-3 pb-3">
+              {device.versionNote ? (
+                <p className="text-xs text-amber">{device.versionNote}</p>
+              ) : null}
               <Textarea
                 value={draftConfig}
                 onChange={(event) => setDraftConfig(event.target.value)}
@@ -481,11 +510,19 @@ export default function App() {
             onSubmit={(event) => {
               event.preventDefault();
               const name = addName.trim();
+              if (!nameOk(name)) return;
+              if (addRole === "host" && !hostFieldsOk(addIp, addMask, addGateway)) return;
               setAddOpen(false);
               void run(() =>
                 api.addDevice(
                   addRole === "host"
-                    ? { name, role: addRole }
+                    ? {
+                        name,
+                        role: addRole,
+                        ip: addIp.trim(),
+                        mask: addMask.trim(),
+                        gateway: addGateway.trim(),
+                      }
                     : { name, role: addRole, x: 80 + Math.random() * 200, y: 80 },
                 ),
               );
@@ -495,7 +532,44 @@ export default function App() {
               Name
             </label>
             <Input id="device-name" value={addName} onChange={(event) => setAddName(event.target.value)} autoFocus />
-            <Button type="submit" disabled={!/^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(addName.trim())}>
+            {addRole === "host" && (
+              <>
+                <label className="block text-sm text-muted" htmlFor="host-ip">
+                  IP address
+                </label>
+                <Input
+                  id="host-ip"
+                  value={addIp}
+                  onChange={(event) => setAddIp(event.target.value)}
+                  autoComplete="off"
+                />
+                <label className="block text-sm text-muted" htmlFor="host-mask">
+                  Mask
+                </label>
+                <Input
+                  id="host-mask"
+                  value={addMask}
+                  onChange={(event) => setAddMask(event.target.value)}
+                  autoComplete="off"
+                />
+                <label className="block text-sm text-muted" htmlFor="host-gateway">
+                  Gateway
+                </label>
+                <Input
+                  id="host-gateway"
+                  value={addGateway}
+                  onChange={(event) => setAddGateway(event.target.value)}
+                  autoComplete="off"
+                />
+                <p className="text-xs text-muted">IP address, mask, and gateway are required.</p>
+              </>
+            )}
+            <Button
+              type="submit"
+              disabled={
+                !nameOk(addName.trim()) || (addRole === "host" && !hostFieldsOk(addIp, addMask, addGateway))
+              }
+            >
               Add {addRole}
             </Button>
           </form>
@@ -503,6 +577,38 @@ export default function App() {
       </Dialog>
     </div>
   );
+}
+
+function nameOk(name: string) {
+  return /^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(name);
+}
+
+function ipv4Ok(value: string) {
+  const parts = value.trim().split(".");
+  if (parts.length !== 4) return false;
+  return parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+}
+
+function maskOk(value: string) {
+  const text = value.trim();
+  if (/^\d{1,2}$/.test(text)) {
+    const prefix = Number(text);
+    return prefix >= 0 && prefix <= 32;
+  }
+  if (text.startsWith("/")) return maskOk(text.slice(1));
+  if (!ipv4Ok(text)) return false;
+  const bits = text.split(".").reduce((acc, octet) => (acc << 8) + Number(octet), 0) >>> 0;
+  let seenZero = false;
+  for (let index = 31; index >= 0; index -= 1) {
+    const one = (bits & (1 << index)) !== 0;
+    if (!one) seenZero = true;
+    else if (seenZero) return false;
+  }
+  return true;
+}
+
+function hostFieldsOk(ip: string, mask: string, gateway: string) {
+  return ipv4Ok(ip) && maskOk(mask) && ipv4Ok(gateway);
 }
 
 function short(name: string) {
