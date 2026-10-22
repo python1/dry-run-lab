@@ -12,7 +12,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from dryrun_lab.acls import added_aces, numbered_config, parse_acls, sequence_of, shadow_sentence, split_sequence
+from dryrun_lab.acls import (
+    ace_at_index,
+    added_aces,
+    numbered_config,
+    parse_acls,
+    sequence_of,
+    shadow_sentence,
+    split_sequence,
+)
 from dryrun_lab.configedit import apply_config_lines, prompt_for
 from dryrun_lab.configparse import canonical_interface, parse_config
 from dryrun_lab.constants import COMPUTED_TAG, ENGINE_HOST, ENGINE_PORT
@@ -363,7 +371,10 @@ class Engine:
             after_reach.setdefault(label, summary)
         missing = {label: "not present" for label in after_reach if label not in before_reach}
         before_reach.update(missing)
-        notices = _notices_for_added(device.name, before_config, updated, lab.warnings)
+        _attribute_unreachable(device.name, before_config, updated, before_warnings, lab.warnings)
+        notices = _notices_for_added(
+            device.name, before_config, updated, lab.warnings, before_warnings
+        )
         after_routes = _snap_routes(self._routes)
         assumed_after = _assumed_links(lab)
         notes = _assumed_notes(
@@ -466,11 +477,20 @@ class Engine:
             if hostname and hostname.lower() != device.name.lower():
                 names.append(hostname)
             for acl in parse_acls(device.config):
+                text_counts: dict[str, int] = {}
                 for ace in acl.aces:
+                    text_counts[ace.text.lower()] = text_counts.get(ace.text.lower(), 0) + 1
+                for ace in acl.aces:
+                    unique = text_counts[ace.text.lower()] == 1
                     matched = [
                         row
                         for row in rows
-                        if any(_unreachable_matches(row, name, acl.name, ace.text) for name in names)
+                        if any(
+                            _unreachable_matches(
+                                row, name, acl.name, ace.text, ace.seq, unique=unique
+                            )
+                            for name in names
+                        )
                     ]
                     if questioned and not matched:
                         continue
@@ -512,15 +532,18 @@ class Engine:
         rows = _records(frame)
         if not rows:
             return None
-        rows.sort(key=lambda row: int(row.get("Line_Index") or 0))
+        rows.sort(key=_matching_line_order)
         top = rows[0]
         acl = str(top.get("Filter") or "acl")
         reported = str(top.get("Line") or "").strip()
         sequence, ace = split_sequence(reported)
         device = lab.device(device_name)
         if sequence is None and device is not None:
-            sequence = sequence_of(device.config, acl, reported)
-            ace = reported
+            located = ace_at_index(device.config, acl, _as_int(top.get("Line_Index")))
+            if located is not None and located[1].lower() == ace.lower():
+                sequence = located[0]
+            else:
+                sequence = sequence_of(device.config, acl, reported)
         where = f"sequence {sequence}: " if sequence is not None else ""
         return f"Dropped by ACL {acl}\n  {where}{ace}\n"
 
@@ -885,25 +908,87 @@ def _config_depth(commands: list[str]) -> int:
     return 2 if nested else 1
 
 
+def _ace_key(row: dict[str, Any]) -> tuple[str, Any, str]:
+    return (
+        str(row.get("acl") or "").lower(),
+        row.get("sequence"),
+        str(row.get("ace") or "").lower(),
+    )
+
+
+def _as_added_line(text: str) -> str:
+    prefix = "Line at sequence"
+    if text.startswith(prefix):
+        return "Line added at sequence" + text[len(prefix) :]
+    return text
+
+
+def _attribute_unreachable(
+    device_name: str,
+    before: str,
+    after: str,
+    before_warnings: list[dict[str, Any]],
+    warnings: list[dict[str, Any]],
+) -> None:
+    """Use 'added' only for an unreachable line this edit introduced.
+
+    A line that was already in the config is not described as added. A
+    warning already stored for the same line keeps its wording, so a later
+    unrelated edit does not rewrite it.
+    """
+    added = {(acl.name.lower(), ace.seq, ace.text.lower()) for acl, ace in added_aces(before, after)}
+    previous: dict[tuple[str, Any, str], str] = {}
+    for row in before_warnings:
+        if str(row.get("kind") or "") != "unreachable":
+            continue
+        if str(row.get("device") or "").lower() != device_name.lower():
+            continue
+        previous[_ace_key(row)] = str(row.get("text") or "")
+    for row in warnings:
+        if str(row.get("kind") or "") != "unreachable":
+            continue
+        if str(row.get("device") or "").lower() != device_name.lower():
+            continue
+        key = _ace_key(row)
+        if key in previous:
+            row["text"] = previous[key]
+            continue
+        if key in added:
+            row["text"] = _as_added_line(str(row.get("text") or ""))
+
+
 def _notices_for_added(
     device_name: str,
     before: str,
     after: str,
     warnings: list[dict[str, Any]],
+    before_warnings: list[dict[str, Any]] | None = None,
 ) -> list[str]:
-    """Banner lines for unreachable ACL entries this edit introduced."""
+    """Banner lines for unreachable ACL entries this edit caused.
+
+    That is a line this edit introduced, or a line already in the config
+    that this edit caused to stop matching. Warnings that were already
+    present stay out of the banner.
+    """
     added = {(acl.name.lower(), ace.seq, ace.text.lower()) for acl, ace in added_aces(before, after)}
-    if not added:
-        return []
+    already: set[tuple[str, Any, str]] = set()
+    for row in before_warnings or []:
+        if str(row.get("kind") or "") != "unreachable":
+            continue
+        if str(row.get("device") or "").lower() != device_name.lower():
+            continue
+        already.add(_ace_key(row))
     notices: list[str] = []
     for row in warnings:
         if str(row.get("kind") or "") != "unreachable":
             continue
         if str(row.get("device") or "").lower() != device_name.lower():
             continue
-        key = (str(row.get("acl") or "").lower(), row.get("sequence"), str(row.get("ace") or "").lower())
+        key = _ace_key(row)
         text = str(row.get("text") or "")
-        if key in added and text:
+        if not text:
+            continue
+        if key in added or (before_warnings is not None and key not in already):
             notices.append(text)
     return notices
 
@@ -926,14 +1011,37 @@ def _covered_by_any(acl: Any, ace: Any) -> bool:
     return any(item.seq < ace.seq and item.text.lower() in {"permit ip any any", "permit any"} for item in acl.aces)
 
 
-def _unreachable_matches(row: dict[str, Any], device_name: str, acl_name: str, ace_text: str) -> bool:
+def _unreachable_matches(
+    row: dict[str, Any],
+    device_name: str,
+    acl_name: str,
+    ace_text: str,
+    ace_seq: int,
+    *,
+    unique: bool = False,
+) -> bool:
+    """True when this Batfish row is this ACE, not an earlier copy of its text."""
     sources = " ".join(_text_list(row.get("Sources"))).lower()
     if acl_name.lower() not in sources:
         return False
     if device_name.lower() not in sources and ":" in sources:
         return False
-    _seq, reported = split_sequence(str(row.get("Unreachable_Line") or ""))
-    return reported.lower() == ace_text.lower()
+    reported_seq, reported = split_sequence(str(row.get("Unreachable_Line") or ""))
+    if reported.lower() != ace_text.lower():
+        return False
+    if reported_seq is not None:
+        return reported_seq == ace_seq
+    return unique
+
+
+def _matching_line_order(row: dict[str, Any]) -> tuple[int, int]:
+    """Earliest matching ACE. Sequence wins over an identical later line."""
+    sequence, _text = split_sequence(str(row.get("Line") or ""))
+    index = _as_int(row.get("Line_Index"))
+    return (
+        sequence if sequence is not None else 1_000_000_000,
+        index if index is not None else 1_000_000_000,
+    )
 
 
 def _text_list(value: Any) -> list[str]:

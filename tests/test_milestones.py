@@ -419,3 +419,102 @@ def test_host_on_vlan_40_reaches_server_until_the_sw1_sw2_trunk_is_down() -> Non
         assert engine.network != "dryrun"
     finally:
         engine.close()
+
+
+def _never_match_lines(section: str, prefix: str) -> list[str]:
+    return [line for line in section.splitlines() if line.startswith(prefix) and "never match" in line]
+
+
+def test_duplicate_acl_line_warning_names_the_line_that_cannot_match() -> None:
+    """A second copy of an ACE is the unreachable line, not the earlier one."""
+    guest = "deny ip 10.30.30.0 0.0.0.255 10.10.10.0 0.0.0.255"
+    engine, lab = _engine()
+    try:
+        assert engine.network.startswith("dryrun-test-")
+        assert engine.network != "dryrun"
+        added = _run(
+            engine,
+            lab,
+            "R1",
+            "\n".join(
+                [
+                    "configure terminal",
+                    "ip access-list extended GUEST-IN",
+                    f"25 {guest}",
+                    "end",
+                ]
+            ),
+        )
+        head, warnings = added.split("\nWarnings\n", 1)
+        warnings = warnings.split("\nReachability\n", 1)[0]
+        assert "Line added at sequence 25, after sequence 10" in head
+        assert guest in head
+        assert "it will never match." in head
+        assert "added at sequence 10" not in added
+        plus = _never_match_lines(warnings, "  + ")
+        assert plus == [
+            "  + R1 Line added at sequence 25, after sequence 10 "
+            f"{guest}; it will never match. (ACL GUEST-IN sequence 25)"
+        ]
+        denied = _run(
+            engine,
+            lab,
+            "R1",
+            "ping 10.10.10.1 source 10.30.30.50 ingress GigabitEthernet0/0.30",
+        )
+        drop = denied.split("Dropped by ACL", 1)[1]
+        assert "sequence 10:" in drop
+        assert "sequence 25" not in drop
+        assert "Dropped because ACL GUEST-IN sequence 10" in denied
+        reverted = _run(engine, lab, "R1", "revert")
+        removed = _warnings_section(reverted)
+        minus = _never_match_lines(removed, "  - ")
+        assert minus == [
+            "  - R1 Line added at sequence 25, after sequence 10 "
+            f"{guest}; it will never match. (ACL GUEST-IN sequence 25)"
+        ]
+        assert "added at sequence 10" not in reverted
+
+        shadowed = _run(
+            engine,
+            lab,
+            "R1",
+            "\n".join(
+                [
+                    "configure terminal",
+                    "ip access-list extended GUEST-IN",
+                    f"5 {guest}",
+                    "end",
+                ]
+            ),
+        )
+        head, warnings = shadowed.split("\nWarnings\n", 1)
+        warnings = warnings.split("\nReachability\n", 1)[0]
+        expected = (
+            "Line at sequence 10, after sequence 5 "
+            f"{guest}; it will never match."
+        )
+        assert expected in head
+        assert "Line added" not in head
+        assert "added at sequence 10" not in shadowed
+        assert "added at sequence 5" not in shadowed
+        plus = _never_match_lines(warnings, "  + ")
+        assert plus == [f"  + R1 {expected} (ACL GUEST-IN sequence 10)"]
+        denied = _run(
+            engine,
+            lab,
+            "R1",
+            "ping 10.10.10.1 source 10.30.30.50 ingress GigabitEthernet0/0.30",
+        )
+        drop = denied.split("Dropped by ACL", 1)[1]
+        assert "sequence 5:" in drop
+        assert "sequence 10" not in drop
+        assert "Dropped because ACL GUEST-IN sequence 5" in denied
+        reverted = _run(engine, lab, "R1", "revert")
+        removed = _warnings_section(reverted)
+        minus = _never_match_lines(removed, "  - ")
+        assert minus == [f"  - R1 {expected} (ACL GUEST-IN sequence 10)"]
+        assert "added" not in removed
+        assert lab.device("R1").config == load_office_lab().device("R1").config
+    finally:
+        engine.close()
