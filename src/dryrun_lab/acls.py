@@ -342,6 +342,14 @@ def _ace_text(action: str, rest: str) -> str:
 
 
 def _remove(aces: list[Ace], command: str) -> list[Ace] | None:
+    """Drop one ACE. A sequence names that line.
+
+    `no 25` removes sequence 25. `no 25 deny ...` removes that sequence.
+    `no deny ...` removes the line only when that text occurs once.
+    Several copies and no sequence leave the list unchanged, so the first
+    copy is not deleted by mistake. Returning the list still consumes the
+    command.
+    """
     only = _NO_SEQ.match(command)
     if only:
         seq = int(only.group(1))
@@ -351,15 +359,11 @@ def _remove(aces: list[Ace], command: str) -> list[Ace] | None:
         return None
     seq = int(match.group(1)) if match.group(1) else None
     want = _ace_text(match.group(2), match.group(3)).lower()
-    out: list[Ace] = []
-    removed = False
-    for ace in aces:
-        same = ace.text.lower() == want and (seq is None or ace.seq == seq)
-        if same and not removed:
-            removed = True
-            continue
-        out.append(ace)
-    return out
+    hits = [ace for ace in aces if ace.text.lower() == want and (seq is None or ace.seq == seq)]
+    if len(hits) != 1:
+        return list(aces)
+    target = hits[0]
+    return [ace for ace in aces if ace is not target]
 
 
 def _keep_unsimulated(lines: list[str], command: str) -> list[str]:
@@ -374,21 +378,27 @@ def _keep_unsimulated(lines: list[str], command: str) -> list[str]:
 
 
 def _blocking_ace(acl: Acl, ace: Ace, blocking: list[str]) -> Ace | None:
+    """The earlier ACE a reported blocker names.
+
+    A sequence on the reported line is that sequence. Without a sequence,
+    the text has to match exactly one earlier ACE. Several copies are left
+    unnamed rather than picking the first.
+    """
     earlier = [item for item in acl.aces if item.seq < ace.seq]
     chosen: list[Ace] = []
     for raw in blocking:
         seq, text = split_sequence(str(raw))
-        for item in earlier:
-            if item.text.lower() != text.lower():
-                continue
-            if seq is not None and item.seq != seq:
-                continue
-            chosen.append(item)
+        hits = [item for item in earlier if item.text.lower() == text.lower()]
+        if seq is not None:
+            hits = [item for item in hits if item.seq == seq]
+        elif len(hits) != 1:
+            continue
+        chosen.extend(hits)
     if chosen:
         return max(chosen, key=lambda item: item.seq)
-    for item in earlier:
-        if item.text.lower() in _ANY:
-            return item
+    covers = [item for item in earlier if item.text.lower() in _ANY]
+    if len(covers) == 1:
+        return covers[0]
     return None
 
 

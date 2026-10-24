@@ -187,12 +187,14 @@ def main(argv: list[str] | None = None) -> int:
                     f"added {added['id']}: {added['aDevice']} {added['aInterface']} — "
                     f"{added['bDevice']} {added['bInterface']}"
                 )
+                _print_extra_notice(lab)
                 if lab.get("engineError"):
                     print(f"error: {lab['engineError']}", file=sys.stderr)
                     return 1
             elif args.link_cmd == "delete":
-                _request(args.url, "DELETE", f"/api/links/{args.link_id}")
+                lab = _request(args.url, "DELETE", f"/api/links/{args.link_id}")
                 print(f"deleted {args.link_id}")
+                _print_extra_notice(lab)
             elif args.link_cmd == "unconfirm":
                 lab = _request(args.url, "POST", f"/api/links/{args.link_id}/unconfirm")
                 if lab.get("unconfirm") == "already":
@@ -247,6 +249,13 @@ def _print_notice(lab: dict, fallback: str) -> None:
         print(notice)
         return
     print(fallback)
+
+
+def _print_extra_notice(lab: dict) -> None:
+    """Print a recompute summary after the line that names the cable id."""
+    notice = str(lab.get("notice") or "").strip()
+    if notice:
+        print(notice)
 
 
 def _device(lab: dict, name: str) -> dict | None:

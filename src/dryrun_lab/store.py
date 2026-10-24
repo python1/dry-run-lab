@@ -235,6 +235,17 @@ def apply_inference(lab: Lab) -> None:
     lab.notes = result.notes
 
 
+def cable_change_headline(
+    verb: str,
+    a_device: str,
+    a_interface: str,
+    b_device: str,
+    b_interface: str,
+) -> str:
+    """First line of a cable recompute. Routes, warnings, and reachability follow."""
+    return f"{verb} {a_device} {a_interface} - {b_device} {b_interface}."
+
+
 def add_user_link(lab: Lab, a_device: str, a_interface: str, b_device: str, b_interface: str) -> Link:
     from dryrun_lab.configparse import canonical_interface
 
@@ -335,7 +346,7 @@ def public_lab(lab: Lab) -> dict:
         parsed = parse_config(device.config)
         ordered = sorted(parsed.interfaces, key=lambda iface: interface_key(iface.name))
         raw["config"] = display_config(device.config)
-        raw["versionNote"] = version_note(device.config) or ""
+        raw["versionNote"] = version_note(device.config, role=device.role) or ""
         raw["interfaces"] = [
             {
                 "name": iface.name,

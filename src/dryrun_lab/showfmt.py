@@ -26,7 +26,12 @@ _PROTOCOL = {
 }
 
 
-def show_running_config(config: str, unsimulated: list[dict[str, Any]]) -> str:
+def show_running_config(
+    config: str,
+    unsimulated: list[dict[str, Any]],
+    *,
+    role: str | None = None,
+) -> str:
     from dryrun_lab.ioscheck import display_config, version_note
 
     missed = [row for row in unsimulated if row.get("kind") not in {"ignored", "limit", "unreachable"}]
@@ -35,7 +40,7 @@ def show_running_config(config: str, unsimulated: list[dict[str, Any]]) -> str:
     lines = [
         "! Loaded config. This is the text the lab simulated, not a live readout.",
     ]
-    note = version_note(config)
+    note = version_note(config, role=role)
     if note:
         lines.append(f"! {note}")
     if missed:
@@ -599,9 +604,13 @@ def _route_key(row: dict[str, Any]) -> tuple[str, str, str]:
     return (str(row.get("network") or ""), str(row.get("protocol") or "").lower(), f"{via_ip or ''}|{via_iface or ''}")
 
 
-def _warning_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
+def _warning_key(row: dict[str, Any]) -> tuple[str, str, str, str, str, str]:
+    """Identity of one warning row: device, file, and line, not the text alone."""
+    line = row.get("line")
     return (
         str(row.get("device") or ""),
+        str(row.get("file") or ""),
+        "" if line is None else str(line),
         str(row.get("text") or "").strip(),
         str(row.get("detail") or "").strip(),
         str(row.get("kind") or ""),

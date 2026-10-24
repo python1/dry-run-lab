@@ -17,6 +17,7 @@ from dryrun_lab.version import version
 from dryrun_lab.engine import Engine, EngineUnavailable
 from dryrun_lab.hosts import host_config
 from dryrun_lab.ioscheck import same_displayed_config
+from dryrun_lab.configparse import canonical_interface
 from dryrun_lab.examples import load_office_lab
 from dryrun_lab.paths import data_home, static_dir
 from dryrun_lab.probes import probes_for_interfaces
@@ -25,6 +26,7 @@ from dryrun_lab.store import (
     Store,
     add_user_link,
     apply_inference,
+    cable_change_headline,
     confirm_link,
     dismiss_link,
     place_host,
@@ -273,22 +275,48 @@ def delete_device(name: str) -> dict:
 @app.post("/api/links")
 def create_link(body: LinkIn) -> dict:
     with _store.lock:
-        if _store.lab.device(body.aDevice) is None or _store.lab.device(body.bDevice) is None:
+        left = _store.lab.device(body.aDevice)
+        right = _store.lab.device(body.bDevice)
+        if left is None or right is None:
             raise HTTPException(404, "Both devices must exist")
-        add_user_link(_store.lab, body.aDevice, body.aInterface, body.bDevice, body.bInterface)
-        _engine.recompute(_store.lab)
+        a_iface = canonical_interface(body.aInterface)
+        b_iface = canonical_interface(body.bInterface)
+        headline = cable_change_headline("Cabled", left.name, a_iface, right.name, b_iface)
+        extra = probes_for_interfaces(_store.lab, left.name, a_iface)
+        extra += probes_for_interfaces(_store.lab, right.name, b_iface)
+        notice = _summarize(
+            _store.lab,
+            lambda: add_user_link(_store.lab, left.name, a_iface, right.name, b_iface),
+            headline,
+            extra,
+        )
         _store.save()
-        return _payload()
+        payload = _payload()
+        payload["notice"] = notice
+        return payload
 
 
 @app.delete("/api/links/{link_id}")
 def delete_link(link_id: str) -> dict:
     with _store.lock:
-        if not dismiss_link(_store.lab, link_id):
+        link = next((item for item in _store.lab.links if item.id == link_id), None)
+        if link is None:
             raise HTTPException(404, "No such link")
-        _engine.recompute(_store.lab)
+        headline = cable_change_headline(
+            "Removed", link.a_device, link.a_interface, link.b_device, link.b_interface
+        )
+        extra = probes_for_interfaces(_store.lab, link.a_device, link.a_interface)
+        extra += probes_for_interfaces(_store.lab, link.b_device, link.b_interface)
+        notice = _summarize(
+            _store.lab,
+            lambda: dismiss_link(_store.lab, link_id),
+            headline,
+            extra,
+        )
         _store.save()
-        return _payload()
+        payload = _payload()
+        payload["notice"] = notice
+        return payload
 
 
 @app.post("/api/links/{link_id}/confirm")
@@ -297,9 +325,8 @@ def confirm(link_id: str) -> dict:
         link = next((item for item in _store.lab.links if item.id == link_id), None)
         if link is None:
             raise HTTPException(404, "No such link")
-        headline = (
-            f"Confirmed {link.a_device} {link.a_interface} - "
-            f"{link.b_device} {link.b_interface}."
+        headline = cable_change_headline(
+            "Confirmed", link.a_device, link.a_interface, link.b_device, link.b_interface
         )
         extra = probes_for_interfaces(_store.lab, link.a_device, link.a_interface)
         extra += probes_for_interfaces(_store.lab, link.b_device, link.b_interface)
@@ -325,9 +352,8 @@ def unconfirm(link_id: str) -> dict:
             payload = _payload()
             payload["unconfirm"] = "already"
             return payload
-        headline = (
-            f"Suggested {link.a_device} {link.a_interface} - "
-            f"{link.b_device} {link.b_interface}."
+        headline = cable_change_headline(
+            "Suggested", link.a_device, link.a_interface, link.b_device, link.b_interface
         )
         extra = probes_for_interfaces(_store.lab, link.a_device, link.a_interface)
         extra += probes_for_interfaces(_store.lab, link.b_device, link.b_interface)
@@ -350,9 +376,8 @@ def dismiss(link_id: str) -> dict:
         link = next((item for item in _store.lab.links if item.id == link_id), None)
         if link is None:
             raise HTTPException(404, "No such link")
-        headline = (
-            f"Rejected {link.a_device} {link.a_interface} - "
-            f"{link.b_device} {link.b_interface}."
+        headline = cable_change_headline(
+            "Rejected", link.a_device, link.a_interface, link.b_device, link.b_interface
         )
         extra = probes_for_interfaces(_store.lab, link.a_device, link.a_interface)
         extra += probes_for_interfaces(_store.lab, link.b_device, link.b_interface)

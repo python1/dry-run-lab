@@ -342,6 +342,11 @@ def _apply_vlan_body(body: list[str], line: str) -> None:
 
 
 def _append_unique(body: list[str], line: str) -> None:
+    """Skip a second copy of the same command inside this one stanza.
+
+    Typing `spanning-tree portfast` twice under Gi0/10 stores it once.
+    Gi0/11 has its own body, so the same text there is a different line.
+    """
     text = line.strip()
     if any(existing.strip().lower() == text.lower() for existing in body):
         return
@@ -358,6 +363,7 @@ def _apply_global(lines: list[str], line: str) -> None:
             if match and (match.group(1), match.group(2)) == prefix:
                 lines[index] = text
                 return
+    # A second copy of the same global command is a no-op, the way IOS treats it.
     if any(existing.strip().lower() == text.lower() for existing in lines):
         return
     _insert_before_end(lines, text)
