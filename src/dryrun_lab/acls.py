@@ -396,9 +396,9 @@ def _blocking_ace(acl: Acl, ace: Ace, blocking: list[str]) -> Ace | None:
         chosen.extend(hits)
     if chosen:
         return max(chosen, key=lambda item: item.seq)
-    for item in earlier:
-        if item.text.lower() in _ANY:
-            return item
+    covers = [item for item in earlier if item.text.lower() in _ANY]
+    if len(covers) == 1:
+        return covers[0]
     return None
 
 

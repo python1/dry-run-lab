@@ -209,6 +209,20 @@ def test_duplicate_ace_text_is_removed_only_by_sequence() -> None:
     assert unnamed == "Line at sequence 30; it will never match."
     named = shadow_sentence(acl, later, [f"10 {deny}"])
     assert "after sequence 10" in named
+    covered = (
+        "hostname R1\n!\nip access-list extended GUEST-IN\n"
+        " permit ip any any\n permit ip any any\n deny ip 10.9.9.0 0.0.0.255 any\n!\nend\n"
+    )
+    wide = parse_acls(covered)[0]
+    shadowed = next(ace for ace in wide.aces if ace.seq == 30)
+    assert shadow_sentence(wide, shadowed, []) == "Line at sequence 30; it will never match."
+    one_cover = (
+        "hostname R1\n!\nip access-list extended GUEST-IN\n"
+        " permit ip any any\n deny ip 10.9.9.0 0.0.0.255 any\n!\nend\n"
+    )
+    single = parse_acls(one_cover)[0]
+    denied = next(ace for ace in single.aces if ace.seq == 20)
+    assert "after sequence 10 permit ip any any" in shadow_sentence(single, denied, [])
     warning = _unreachable_warning("R1", acl, later, [f"10 {deny}"])
     assert warning["file"] == "configs/R1.cfg"
 
