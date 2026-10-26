@@ -82,12 +82,15 @@ def apply_acl_body(body: list[str], line: str) -> list[str]:
     seq = int(match.group(1)) if match.group(1) else None
     text = _ace_text(match.group(2), match.group(3))
     if seq is None:
+        if any(ace.text.lower() == text.lower() for ace in aces):
+            return _render(aces, extras)
         seq = (aces[-1].seq + 10) if aces else 10
         while any(ace.seq == seq for ace in aces):
             seq += 10
         aces.append(Ace(seq, text, explicit=False))
+    elif any(ace.seq == seq for ace in aces):
+        return _render(aces, extras)
     else:
-        aces = [ace for ace in aces if ace.seq != seq]
         aces.append(Ace(seq, text, explicit=True))
     aces.sort(key=lambda ace: ace.seq)
     return _render(aces, extras)

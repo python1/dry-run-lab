@@ -11,6 +11,9 @@ import re
 from typing import Any
 
 from dryrun_lab.configparse import canonical_interface
+from dryrun_lab.facts import routing_enabled
+from dryrun_lab.hosts import gateway_address
+from dryrun_lab.iosgrammar import match_show
 from dryrun_lab.nsort import interface_key
 
 _PROTOCOL = {
@@ -89,7 +92,14 @@ def show_ip_interface_brief(rows: list[dict[str, Any]]) -> str:
     return "\n".join(body) + "\n"
 
 
-def show_ip_route(rows: list[dict[str, Any]]) -> str:
+def show_ip_route(
+    rows: list[dict[str, Any]],
+    *,
+    config: str | None = None,
+    role: str | None = None,
+) -> str:
+    if config is not None and role == "switch" and not routing_enabled(config):
+        return _show_l2_gateway(config)
     lines = [
         "Codes: L - local, C - connected, S - static, O - OSPF, B - BGP",
         "       Codes are the simulator's classification of each computed route.",
@@ -135,6 +145,18 @@ def show_ip_route(rows: list[dict[str, Any]]) -> str:
         else:
             lines.append(f"{code}{star}    {net} [{distance}/{metric}]")
     return "\n".join(lines) + "\n"
+
+
+def _show_l2_gateway(config: str) -> str:
+    """IOS `show ip route` on a switch that is not routing."""
+    gateway = gateway_address(config)
+    shown = gateway if gateway else "not set"
+    return (
+        f"Default gateway is {shown}\n"
+        "\n"
+        f"{'Host':<18}{'Gateway':<18}{'Last Use':<12}{'Total Uses':<12}Interface\n"
+        "ICMP redirect cache is empty\n"
+    )
 
 
 def _warning_lines(rows: list[dict[str, Any]]) -> list[str]:
@@ -183,17 +205,23 @@ def show_unsimulated(device: str, rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def show_vlan_brief(rows: list[dict[str, Any]], names: dict[int, str]) -> str:
+def show_vlan_brief(
+    rows: list[dict[str, Any]],
+    names: dict[int, str],
+    interfaces: list[dict[str, Any]] | None = None,
+) -> str:
     header = f"{'VLAN':<6} {'Name':<32} {'Status':<9} Ports"
     lines = [header, f"{'----':<6} {'-' * 32} {'-' * 9} {'-' * 24}"]
+    hidden = _vlan_hidden_ports(interfaces)
     by_id: dict[int, list[str]] = {}
     for row in rows:
         vlan_id = _int(row.get("vlan"))
         ports = [_short_interface(name) for name in row.get("ports") or []]
         by_id.setdefault(vlan_id, [])
         for port in ports:
-            if port not in by_id[vlan_id]:
-                by_id[vlan_id].append(port)
+            if port in hidden or port in by_id[vlan_id]:
+                continue
+            by_id[vlan_id].append(port)
     for vlan_id, name in names.items():
         by_id.setdefault(vlan_id, [])
         names.setdefault(vlan_id, name)
@@ -205,6 +233,21 @@ def show_vlan_brief(rows: list[dict[str, Any]], names: dict[int, str]) -> str:
             f"{vlan_id:<6} {(names.get(vlan_id) or '')[:32]:<32} {'active':<9} {', '.join(ports)}"
         )
     return "\n".join(lines) + "\n"
+
+
+def _vlan_hidden_ports(interfaces: list[dict[str, Any]] | None) -> set[str]:
+    """Trunks and SVIs. `show vlan brief` lists access ports."""
+    if not interfaces:
+        return set()
+    hidden: set[str] = set()
+    for row in interfaces:
+        name = str(row.get("name") or "")
+        mode = str(row.get("mode") or "").upper()
+        canon = canonical_interface(name)
+        if mode == "TRUNK" or canon.lower().startswith("vlan"):
+            hidden.add(_short_interface(canon))
+            hidden.add(_short_interface(name))
+    return hidden
 
 
 def show_interfaces_trunk(rows: list[dict[str, Any]]) -> str:
@@ -343,9 +386,16 @@ def explain_disposition(trace: dict[str, Any], drop: str | None, dst: str) -> st
     if disposition == "EXITS_NETWORK":
         node, iface = _located(steps, "EXITS_NETWORK", "outputInterface", "interface")
         return f"The trace leaves the lab on {_where(node, iface)}."
+    if disposition == "NOT_ATTACHED":
+        note = str(trace.get("attached") or "").strip()
+        return note or "This host has no confirmed link, so it is not attached."
     if disposition == "NO_ROUTE":
         node, _iface = _located(steps, "NO_ROUTE", "outputInterface", "interface")
-        return f"No route for {dst} on {node or 'the device'}."
+        sentence = f"No route for {dst} on {node or 'the device'}."
+        gateway = trace.get("gateway")
+        if gateway:
+            sentence += f" ip default-gateway {gateway} is configured and was not used for this trace."
+        return sentence
     if disposition == "NULL_ROUTED":
         node, _iface = _located(steps, "NULL_ROUTED", "outputInterface", "interface")
         return f"Discarded by a null route for {dst} on {node or 'the device'}."
@@ -814,69 +864,36 @@ def command_disposition(command: str) -> str:
 
 
 def normalize_command(command: str) -> str | None:
-    folded = " ".join(command.strip().split()).lower()
-    if "|" in folded:
-        return None
-    table = {
-        "show running-config": "running-config",
-        "show run": "running-config",
-        "sh running-config": "running-config",
-        "sh run": "running-config",
-        "show ip interface brief": "interfaces",
-        "show ip int brief": "interfaces",
-        "show ip int br": "interfaces",
-        "sh ip int brief": "interfaces",
-        "sh ip int br": "interfaces",
-        "sh ip interface brief": "interfaces",
-        "show ip route": "routes",
-        "show ip routes": "routes",
-        "sh ip route": "routes",
-        "sh ip ro": "routes",
-        "show warnings": "warnings",
-        "show unsimulated": "warnings",
-        "show vlan brief": "vlan",
-        "show vlan": "vlan",
-        "sh vlan brief": "vlan",
-        "sh vlan": "vlan",
-        "show interfaces trunk": "trunk",
-        "show interface trunk": "trunk",
-        "show int trunk": "trunk",
-        "sh interfaces trunk": "trunk",
-        "sh int trunk": "trunk",
-        "show access-lists": "acl",
-        "show access-list": "acl",
-        "show ip access-lists": "acl",
-        "sh access-lists": "acl",
-        "sh ip access-lists": "acl",
-        "show ip ospf neighbor": "ospf-neighbor",
-        "show ip ospf neighbors": "ospf-neighbor",
-        "sh ip ospf neighbor": "ospf-neighbor",
-        "sh ip ospf neighbors": "ospf-neighbor",
-    }
-    return table.get(folded)
+    return match_show(command)
 
 
-def command_help() -> str:
-    return (
-        "This device CLI can compute:\n"
-        "  show running-config\n"
-        "  show ip interface brief\n"
-        "  show ip route\n"
-        "  show vlan brief\n"
-        "  show interfaces trunk\n"
-        "  show access-lists\n"
-        "  show ip ospf neighbor\n"
-        "  show warnings\n"
-        "  ping DESTINATION [source ADDRESS] [ingress INTERFACE]\n"
-        "  traceroute DESTINATION [source ADDRESS] [ingress INTERFACE]\n"
-        "  configure terminal ... end\n"
-        "  abort\n"
-        "  revert\n"
-        "Ping, traceroute, show ip ospf neighbor, and other show results are computed.\n"
-        "A show command this lab does not compute says it is not simulated in this version.\n"
-        "Pipes are not available.\n"
-        "revert undoes one configure terminal ... end block on this device and recomputes.\n"
+def command_help(role: str | None = None) -> str:
+    lines = [
+        "This device CLI can compute:",
+        "  show running-config",
+        "  show ip interface brief",
+        "  show ip route",
+    ]
+    if role != "host":
+        lines.append("  show vlan brief")
+        lines.append("  show interfaces trunk")
+    lines.extend(
+        [
+            "  show access-lists",
+            "  show ip ospf neighbor",
+            "  show warnings",
+            "  ping DESTINATION [source ADDRESS] [ingress INTERFACE]",
+            "  traceroute DESTINATION [source ADDRESS] [ingress INTERFACE]",
+            "  configure terminal ... end",
+            "  abort",
+            "  revert",
+            "Ping, traceroute, show ip ospf neighbor, and other show results are computed.",
+            "A show command this lab does not compute says it is not simulated in this version.",
+            "Pipes are not available.",
+            "revert undoes one configure terminal ... end block on this device and recomputes.",
+        ]
     )
+    return "\n".join(lines) + "\n"
 
 
 def _split_hop(hop: Any) -> tuple[str | None, str | None]:

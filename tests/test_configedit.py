@@ -53,11 +53,11 @@ def test_trunk_add_keeps_existing_vlans() -> None:
 def test_shutdown_replaces_no_shutdown_and_revert_text_round_trips() -> None:
     original = "interface GigabitEthernet0/0\n no shutdown\n!\nend\n"
     shut = apply_config_lines(original, ["interface GigabitEthernet0/0", "shutdown", "end"])
-    assert "\nshutdown\n" in shut
+    assert "\n shutdown\n" in shut
     assert "no shutdown" not in shut
     restored = apply_config_lines(shut, ["interface GigabitEthernet0/0", "no shutdown", "end"])
-    assert "no shutdown" in restored
-    assert "\nshutdown\n" not in restored
+    assert " no shutdown" in restored
+    assert "\n shutdown\n" not in restored
 
 
 def test_flow_and_show_commands_parse() -> None:

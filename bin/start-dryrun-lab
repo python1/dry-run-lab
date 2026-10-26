@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Start Dry Run Lab from any directory. DRYRUN_HOME is not required.
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+repo=""
+if [[ -x "$here/../ensure-running" ]]; then
+  repo="$(cd "$here/.." && pwd)"
+fi
+if [[ ! -x "${repo}/ensure-running" ]]; then
+  config="${XDG_CONFIG_HOME:-$HOME/.config}/dryrun-lab/repo-path"
+  if [[ -f "$config" ]]; then
+    repo="$(head -n 1 "$config" | tr -d '\r')"
+  fi
+fi
+if [[ ! -x "${repo:-}/ensure-running" ]]; then
+  printf '%s\n' "Dry Run Lab is not installed. From the repository directory, run ./ensure-running once." >&2
+  exit 1
+fi
+exec "$repo/ensure-running" "$@"

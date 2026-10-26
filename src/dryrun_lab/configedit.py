@@ -11,7 +11,8 @@ import re
 
 from dryrun_lab.acls import apply_acl_body, apply_resequence_command, is_resequence
 from dryrun_lab.configparse import canonical_interface
-from dryrun_lab.ioscheck import fold_line
+from dryrun_lab.ioscheck import canonical_line
+from dryrun_lab.iosgrammar import leaves_mode
 
 _STANZA = re.compile(r"^(interface|vlan|router|ip access-list|line|banner)\b", re.IGNORECASE)
 _ENTER = {"configure terminal", "configure", "conf t", "conf term", "conf terminal"}
@@ -31,8 +32,7 @@ def apply_config_lines(config: str, commands: list[str]) -> str:
         line = raw.strip()
         if not line or line.startswith("!"):
             continue
-        line = fold_line(line)
-        lower = line.lower()
+        lower = " ".join(line.split()).lower()
         if lower in {"end", "abort"}:
             break
         if lower in _ENTER:
@@ -41,11 +41,15 @@ def apply_config_lines(config: str, commands: list[str]) -> str:
             if context:
                 context.pop()
             continue
+        line = canonical_line(_draft_for(context), line)
+        lower = line.lower()
         if lower.startswith("interface "):
             name = canonical_interface(line.split(None, 1)[1])
             context = [("interface", name)]
             _ensure_interface(lines, name)
             continue
+        if context and leaves_mode(context[-1][0], line, _acl_style(context)):
+            context = []
         vlan = re.fullmatch(r"vlan\s+(\d+)", lower)
         if vlan:
             context = [("vlan", vlan.group(1))]
@@ -77,16 +81,20 @@ def prompt_for(device: str, commands: list[str]) -> str:
         line = raw.strip()
         if not line or line.startswith("!"):
             continue
-        lower = line.lower()
+        lower = " ".join(line.split()).lower()
         if lower in _ENTER or lower in {"end", "abort"}:
             continue
         if lower == "exit":
             if context:
                 context.pop()
             continue
+        line = canonical_line(_draft_for(context), line)
+        lower = line.lower()
         if lower.startswith("interface "):
             context = [("interface", canonical_interface(line.split(None, 1)[1]))]
             continue
+        if context and leaves_mode(context[-1][0], line, _acl_style(context)):
+            context = []
         if re.fullmatch(r"vlan\s+\d+", lower):
             context = [("vlan", lower.split()[1])]
             continue
@@ -269,6 +277,31 @@ def _apply_inside(lines: list[str], kind: str, ident: str, line: str) -> None:
     lines[start + 1 : end] = body
 
 
+def _acl_style(context: list[tuple[str, str]]) -> str:
+    if not context or context[-1][0] != "acl":
+        return "extended"
+    if re.search(r"(?i)\bstandard\b", context[-1][1]):
+        return "standard"
+    return "extended"
+
+
+def _draft_for(context: list[tuple[str, str]]) -> list[str]:
+    if not context:
+        return []
+    kind, ident = context[-1]
+    if kind == "interface":
+        return [f"interface {ident}"]
+    if kind == "vlan":
+        return [f"vlan {ident}"]
+    if kind in {"acl", "router"}:
+        return [ident]
+    return []
+
+
+def _body_text(line: str) -> str:
+    return " " + line.strip()
+
+
 def _apply_interface_body(body: list[str], line: str) -> None:
     added = re.match(r"(?i)^switchport\s+trunk\s+allowed\s+vlan\s+add\s+(.+)$", line.strip())
     if added:
@@ -284,9 +317,9 @@ def _apply_interface_body(body: list[str], line: str) -> None:
             for item in extra:
                 if item not in have:
                     have.append(item)
-            body[index] = "switchport trunk allowed vlan " + ",".join(have)
+            body[index] = _body_text("switchport trunk allowed vlan " + ",".join(have))
             return
-        body.append(line.strip())
+        body.append(_body_text(line))
         return
     if _replace_pair(body, line, "shutdown", "no shutdown"):
         return
@@ -299,24 +332,37 @@ def _apply_interface_body(body: list[str], line: str) -> None:
         ("switchport trunk encapsulation", ("switchport trunk encapsulation ",)),
     )
     lower = line.strip().lower()
-    for _label, prefixes in replacements:
-        if any(lower.startswith(prefix) or lower == prefix.strip() for prefix in prefixes):
-            for index, existing in enumerate(body):
-                existing_lower = existing.strip().lower()
-                if any(existing_lower.startswith(prefix) or existing_lower == prefix.strip() for prefix in prefixes):
-                    body[index] = line.strip()
-                    return
-            body.append(line.strip())
-            return
+    if not _second_command(lower):
+        for _label, prefixes in replacements:
+            if any(lower.startswith(prefix) or lower == prefix.strip() for prefix in prefixes):
+                for index, existing in enumerate(body):
+                    existing_lower = existing.strip().lower()
+                    if _second_command(existing_lower):
+                        continue
+                    if any(existing_lower.startswith(prefix) or existing_lower == prefix.strip() for prefix in prefixes):
+                        body[index] = _body_text(line)
+                        return
+                body.append(_body_text(line))
+                return
     access_group = re.match(r"(?i)^ip\s+access-group\s+\S+\s+(in|out)$", line.strip())
     if access_group:
         direction = access_group.group(1).lower()
         for index, existing in enumerate(body):
             match = re.match(r"(?i)^ip\s+access-group\s+\S+\s+(in|out)$", existing.strip())
             if match and match.group(1).lower() == direction:
-                body[index] = line.strip()
+                body[index] = _body_text(line)
                 return
+        body.append(_body_text(line))
+        return
     _append_unique(body, line)
+
+
+def _second_command(text: str) -> bool:
+    """True when a second command is glued on after the first keyword phrase."""
+    return re.search(
+        r"\b(?:switchport|shutdown|description|encapsulation|spanning-tree)\b",
+        text,
+    ) is not None and text.strip().lower().count("switchport") + text.strip().lower().count("shutdown") > 1
 
 
 def _replace_pair(body: list[str], line: str, left: str, right: str) -> bool:
@@ -325,9 +371,9 @@ def _replace_pair(body: list[str], line: str, left: str, right: str) -> bool:
         return False
     for index, existing in enumerate(body):
         if existing.strip().lower() in {left, right}:
-            body[index] = line.strip()
+            body[index] = _body_text(line)
             return True
-    body.append(line.strip())
+    body.append(_body_text(line))
     return True
 
 
@@ -336,7 +382,7 @@ def _apply_vlan_body(body: list[str], line: str) -> None:
     if text.lower().startswith("name "):
         for index, existing in enumerate(body):
             if existing.strip().lower().startswith("name "):
-                body[index] = text
+                body[index] = _body_text(text)
                 return
     _append_unique(body, text)
 
@@ -350,11 +396,26 @@ def _append_unique(body: list[str], line: str) -> None:
     text = line.strip()
     if any(existing.strip().lower() == text.lower() for existing in body):
         return
-    body.append(text)
+    body.append(_body_text(text))
 
 
 def _apply_global(lines: list[str], line: str) -> None:
     text = line.strip()
+    if text.lower().startswith("hostname "):
+        found = False
+        kept: list[str] = []
+        for existing in lines:
+            if existing.strip().lower().startswith("hostname "):
+                if not found:
+                    kept.append(text)
+                    found = True
+                continue
+            kept.append(existing)
+        if found:
+            lines[:] = kept
+            return
+        _insert_before_end(lines, text)
+        return
     route = re.match(r"(?i)^ip\s+route\s+(\S+)\s+(\S+)\s+(\S+)", text)
     if route:
         prefix = (route.group(1), route.group(2))

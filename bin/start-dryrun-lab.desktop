@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Start Dry Run Lab
+Comment=Start Dry Run Lab on this computer
+Exec=@ROOT@/bin/start-dryrun-lab
+Terminal=false
+Categories=Network;
+StartupNotify=false

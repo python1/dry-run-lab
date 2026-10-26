@@ -106,7 +106,7 @@ def _vlan_acl_and_trunk(engine: Engine, lab) -> None:
     )
     brief = _run(engine, lab, "SW2", "show vlan brief")
     assert "40" in brief and "Gi0/12" in brief
-    assert brief.index("Gi0/1") < brief.index("Gi0/12")
+    assert "Gi0/1," not in brief and "Gi0/1 " not in brief and not brief.rstrip().endswith("Gi0/1")
     trunk = _run(engine, lab, "SW1", "show interfaces trunk")
     assert "40" in trunk
     ping = _run(

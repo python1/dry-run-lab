@@ -33,14 +33,15 @@ def annotate_warnings(rows: list[dict[str, Any]], configs: dict[str, str]) -> li
         text = str(row.get("text") or "").strip()
         device = row.get("device")
         config = configs.get(str(device), "") if device else ""
-        if device and _GATEWAY.match(text) and routing_enabled(config):
-            annotated.append(
-                {
-                    **row,
-                    "detail": "ignored when ip routing is enabled",
-                    "kind": "ignored",
-                }
-            )
-        else:
-            annotated.append(row)
+        if device and _GATEWAY.match(text):
+            if routing_enabled(config):
+                annotated.append(
+                    {
+                        **row,
+                        "detail": "ignored when ip routing is enabled",
+                        "kind": "ignored",
+                    }
+                )
+            continue
+        annotated.append(row)
     return annotated

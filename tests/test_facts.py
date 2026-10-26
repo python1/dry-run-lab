@@ -41,8 +41,7 @@ def test_default_gateway_wording_is_per_device() -> None:
     assert out[0]["detail"] == "ignored when ip routing is enabled"
     assert out[0]["kind"] == "ignored"
     assert out[1]["kind"] == "ignored"
-    assert out[2]["detail"] == "This feature is not currently supported"
-    assert out[2]["kind"] == "parse"
+    assert all(row.get("device") != "SW9" for row in out)
 
 
 def test_show_warnings_split_ignored_from_not_simulated() -> None:

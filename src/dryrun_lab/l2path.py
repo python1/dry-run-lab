@@ -20,6 +20,28 @@ _ENCAP = re.compile(r"(?i)^encapsulation\s+dot1q\s+(\d+)\s*$")
 _ADDRESS = re.compile(r"(?i)^ip\s+address\s+(\d+\.\d+\.\d+\.\d+)\s+")
 
 
+def unattached_host(lab: Lab, source: str) -> str | None:
+    """Sentence for a host with an address and no confirmed cable.
+
+    Suggested links are not a connection. An uncabled host reaches nothing.
+    """
+    host = lab.device(source)
+    if host is None or host.role != "host":
+        return None
+    parsed = parse_config(host.config)
+    addressed = [iface for iface in parsed.interfaces if iface.address]
+    if not addressed:
+        return None
+    for iface in addressed:
+        if _confirmed_from(lab, host.name, iface.name):
+            return None
+    iface = addressed[0]
+    return (
+        f"{host.name} {_short(iface.name)}: no confirmed link. "
+        "Suggested links are not used, so this host is not attached."
+    )
+
+
 def layer2_note(
     lab: Lab,
     interfaces: dict[str, list[dict[str, Any]]],

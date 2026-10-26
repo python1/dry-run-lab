@@ -161,9 +161,8 @@ def _office_assertions(engine: Engine, lab) -> None:
     }
     assert details["R1"] == "ignored when ip routing is enabled"
     assert details["SW1"] == "ignored when ip routing is enabled"
-    assert "not currently supported" in str(details["SW2"])
-    assert "not currently supported" in str(details["SW3"])
-    assert details["R1"] != details["SW2"]
+    assert "SW2" not in details
+    assert "SW3" not in details
     joined = " ".join(texts)
     assert "Cisco" not in joined
     assert "NetSim" not in joined
@@ -172,4 +171,4 @@ def _office_assertions(engine: Engine, lab) -> None:
     assert "ignored when ip routing is enabled" in r1_warnings
     assert "NOT simulated" not in r1_warnings
     assert "NOT simulated" in sw2_warnings
-    assert "not currently supported" in sw2_warnings
+    assert "ip default-gateway" not in sw2_warnings
