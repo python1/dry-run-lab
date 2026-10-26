@@ -32,8 +32,27 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status", help="Engine and lab status")
     sub.add_parser("serve", help="Run the lab server in the foreground")
 
-    load = sub.add_parser("load", help="Load a lab directory of configs")
-    load.add_argument("path")
+    load = sub.add_parser(
+        "load",
+        help="Load a lab folder (topology.json, configs, optional neighbor pastes)",
+        description=(
+            "Load a lab folder. This is the normal way to open a customer pack,\n"
+            "not only examples/office-lab. The folder looks like this:\n"
+            "\n"
+            "  topology.json      device names, roles, positions, and file paths\n"
+            "  configs/*.cfg      one config per router, switch, or host\n"
+            "  neighbors/*.txt    optional CDP or LLDP pastes\n"
+            "\n"
+            "Each device in topology.json has file, role (router, switch, or host),\n"
+            "optional neighbors, and optional x and y. A host config is Ethernet0,\n"
+            "an address, and ip default-gateway. CDP does not suggest a host cable.\n"
+            "A host cable is suggested when the host address is in an access VLAN\n"
+            "subnet and the switch port description matches the host. Otherwise\n"
+            "add that cable with link add."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    load.add_argument("path", help="Folder that contains topology.json")
 
     sub.add_parser("devices", help="List devices")
     sub.add_parser("links", help="List cables, including suggestions")
@@ -50,6 +69,16 @@ def main(argv: list[str] | None = None) -> int:
 
     dismiss = sub.add_parser("dismiss", help="Reject a suggested link")
     dismiss.add_argument("link_id")
+
+    device = sub.add_parser("device", help="Add a router or a switch with its config")
+    device_sub = device.add_subparsers(dest="device_cmd", required=True)
+    device_add = device_sub.add_parser("add", help="Add a router or switch and paste its config from a file")
+    device_add.add_argument("name")
+    device_add.add_argument("--role", required=True, choices=["router", "switch"])
+    device_add.add_argument("--config", required=True, help="Path to the config file")
+    device_add.add_argument("--neighbors", default=None, help="Optional CDP or LLDP paste")
+    device_add.add_argument("--x", type=float, default=None)
+    device_add.add_argument("--y", type=float, default=None)
 
     host = sub.add_parser("host", help="Add, delete, or list hosts")
     host_sub = host.add_subparsers(dest="host_cmd", required=True)
@@ -140,6 +169,35 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "links":
             lab = _request(args.url, "GET", "/api/lab")
             _print_links(lab)
+        elif args.cmd == "device":
+            config_path = Path(args.config)
+            if not config_path.is_file():
+                raise RuntimeError(f"No config file at {config_path}")
+            config = config_path.read_text(encoding="utf-8")
+            neighbors = ""
+            if args.neighbors:
+                neighbor_path = Path(args.neighbors)
+                if not neighbor_path.is_file():
+                    raise RuntimeError(f"No neighbor file at {neighbor_path}")
+                neighbors = neighbor_path.read_text(encoding="utf-8")
+            body = {
+                "name": args.name,
+                "role": args.role,
+                "config": config,
+                "neighborText": neighbors,
+            }
+            if args.x is not None:
+                body["x"] = args.x
+            if args.y is not None:
+                body["y"] = args.y
+            lab = _request(args.url, "POST", "/api/devices", body)
+            added = _device(lab, args.name)
+            if added is None:
+                raise RuntimeError(f"{args.role} {args.name} was not added")
+            print(f"added {args.role} {added['name']}")
+            if lab.get("engineError"):
+                print(f"error: {lab['engineError']}", file=sys.stderr)
+                return 1
         elif args.cmd == "host":
             if args.host_cmd == "add":
                 from dryrun_lab.hosts import host_config

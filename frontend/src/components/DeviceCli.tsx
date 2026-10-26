@@ -3,14 +3,25 @@ import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "../api";
+import { maskConfig } from "../mask";
 import type { Lab } from "../types";
 
-export function DeviceCli({ device, onLab }: { device: string | null; onLab?: (lab: Lab) => void }) {
+export function DeviceCli({
+  device,
+  onLab,
+  maskSecrets = true,
+}: {
+  device: string | null;
+  onLab?: (lab: Lab) => void;
+  maskSecrets?: boolean;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
   const thumbRef = useRef<HTMLDivElement>(null);
   const syncRef = useRef<() => void>(() => {});
+  const maskRef = useRef(maskSecrets);
+  maskRef.current = maskSecrets;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -117,7 +128,8 @@ export function DeviceCli({ device, onLab }: { device: string | null; onLab?: (l
         promptRef.current = result.prompt.endsWith(" ") ? result.prompt : `${result.prompt} `;
         const lines = result.text.split("\n");
         const body = lines[0]?.includes(trimmed) ? lines.slice(1) : lines;
-        writeBlock(body.join("\n"));
+        const text = body.join("\n");
+        writeBlock(maskRef.current ? maskConfig(text) : text);
       } catch (error) {
         term.writeln(`\x1b[31m${error instanceof Error ? error.message : "request failed"}\x1b[0m`);
       }

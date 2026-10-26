@@ -60,12 +60,14 @@ class Store:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.lock = threading.Lock()
+        self.revision = 0
         self.lab = Lab()
         if path.is_file():
             self.lab = lab_from_dict(json.loads(path.read_text(encoding="utf-8")))
 
     def save(self) -> None:
         """Write the lab by renaming a temp file, so a crash cannot leave a partial file."""
+        self.revision += 1
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(lab_to_dict(self.lab), indent=2) + "\n"
         temporary = self.path.with_name(self.path.name + ".tmp")

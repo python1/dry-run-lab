@@ -3,6 +3,7 @@ import { Cable, Plus, Router, Trash2 } from "lucide-react";
 import { api } from "./api";
 import { DeviceCli } from "./components/DeviceCli";
 import { Topology } from "./components/Topology";
+import { maskConfig, maskSecretsDefault } from "./mask";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogContent } from "./components/ui/dialog";
@@ -14,6 +15,15 @@ const DISCLAIMER =
   "Computed results are a simulation from these configs. They are not proof that a live network will behave the same way. Not affiliated with or endorsed by Cisco.";
 const CREDIT = "Created by Paul Charydczak";
 const SPLIT_KEY = "dryrun-terminal-height";
+const MASK_KEY = "dryrun-mask-secrets";
+
+function readMask() {
+  try {
+    return maskSecretsDefault(localStorage.getItem(MASK_KEY));
+  } catch {
+    return true;
+  }
+}
 
 function readSplit() {
   try {
@@ -48,7 +58,9 @@ export default function App() {
   const [fitNonce, setFitNonce] = useState(0);
   const [terminalHeight, setTerminalHeight] = useState(readSplit);
   const [stamp, setStamp] = useState("");
+  const [maskSecrets, setMaskSecrets] = useState(readMask);
   const gridRef = useRef<HTMLDivElement>(null);
+  const revisionRef = useRef(0);
 
   useEffect(() => {
     try {
@@ -69,6 +81,7 @@ export default function App() {
     }
     try {
       const next = await action();
+      revisionRef.current = next.revision ?? revisionRef.current;
       if (next.notice) setNotice(next.notice);
       setLab(next);
     } catch (err) {
@@ -81,11 +94,44 @@ export default function App() {
   }
 
   useEffect(() => {
-    void run(() => api.lab());
+    void run(async () => {
+      const next = await api.lab();
+      revisionRef.current = next.revision ?? 0;
+      return next;
+    });
     void api
       .health()
       .then((body) => setStamp(body.version || "unknown"))
       .catch(() => setStamp("unknown"));
+  }, []);
+
+  useEffect(() => {
+    let cancel = false;
+    const tick = async () => {
+      if (cancel || busyRef.current) return;
+      try {
+        const rev = await api.revision();
+        if (cancel || busyRef.current || rev.revision === revisionRef.current) return;
+        const next = await api.lab();
+        if (cancel || busyRef.current) return;
+        const revision = next.revision ?? 0;
+        if (revision === revisionRef.current) return;
+        revisionRef.current = revision;
+        setLab(next);
+      } catch {
+        /* the server may be restarting */
+      }
+    };
+    const id = window.setInterval(() => void tick(), 2000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancel = true;
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, []);
 
   const device = lab?.devices.find((item) => item.name === selected) ?? null;
@@ -259,6 +305,16 @@ export default function App() {
               <Plus className="h-3.5 w-3.5" /> Host
             </Button>
           </div>
+          <div className="space-y-1 px-3 pb-2 text-[11px] leading-relaxed text-muted" aria-label="Badge legend">
+            <div className="flex items-center gap-2">
+              <Badge tone="coral">n</Badge>
+              <span>Red: lines not simulated</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge tone="amber">ignored</Badge>
+              <span>Orange: ignored when ip routing is enabled, or an ACL line that will never match</span>
+            </div>
+          </div>
           <div className="min-h-0 flex-1 overflow-auto px-2">
             {lab?.devices.map((item) => (
               <button
@@ -301,6 +357,11 @@ export default function App() {
             <h2 className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wider text-muted">
               <Cable className="h-3.5 w-3.5" /> Suggested links
             </h2>
+            <p className="mb-2 text-xs text-muted">
+              Dashed cables are suggestions. CDP does not suggest a host cable. A host cable is
+              suggested when the host address is in an access VLAN subnet and the port description
+              matches the host. Draw any other host cable yourself.
+            </p>
             {pending && (
               <p className="mb-2 text-xs text-amber">
                 Drawing from {pending.device} {short(pending.iface)}. Click the other interface.
@@ -361,8 +422,24 @@ export default function App() {
           )}
         </section>
         <aside className={`${tab === "config" ? "flex" : "hidden"} min-h-0 flex-col border-line lg:col-start-3 lg:row-start-1 lg:flex lg:border-l`}>
-          <div className="flex items-center justify-between px-3 py-2">
+          <div className="flex items-center justify-between gap-2 px-3 py-2">
             <h2 className="text-xs uppercase tracking-wider text-muted">Config {device ? `· ${device.name}` : ""}</h2>
+            <label className="flex items-center gap-2 text-xs text-muted">
+              <input
+                type="checkbox"
+                checked={maskSecrets}
+                onChange={(event) => {
+                  const next = event.target.checked;
+                  setMaskSecrets(next);
+                  try {
+                    localStorage.setItem(MASK_KEY, next ? "on" : "off");
+                  } catch {
+                    /* storage can be blocked */
+                  }
+                }}
+              />
+              Mask secrets
+            </label>
             {device && (
               <Button
                 size="sm"
@@ -383,12 +460,21 @@ export default function App() {
                 <p className="text-xs text-amber">{device.versionNote}</p>
               ) : null}
               <Textarea
-                value={draftConfig}
-                onChange={(event) => setDraftConfig(event.target.value)}
+                value={maskSecrets ? maskConfig(draftConfig) : draftConfig}
+                onChange={(event) => {
+                  if (!maskSecrets) setDraftConfig(event.target.value);
+                }}
+                readOnly={maskSecrets}
                 className="min-h-48 flex-1"
                 spellCheck={false}
                 aria-label="Device config"
               />
+              {maskSecrets ? (
+                <p className="text-xs text-muted">
+                  Passwords, secrets, and SNMP communities are hidden. Turn masking off to edit them.
+                  This is on by default so a screenshot of this panel does not show them.
+                </p>
+              ) : null}
               <label className="text-xs text-muted" htmlFor="neighbors">
                 Neighbor text (CDP or LLDP paste)
               </label>
@@ -524,7 +610,14 @@ export default function App() {
             </label>
           </div>
           <div className="min-h-0 flex-1 px-2 pb-3">
-            <DeviceCli device={selected} onLab={setLab} />
+            <DeviceCli
+              device={selected}
+              maskSecrets={maskSecrets}
+              onLab={(next) => {
+                revisionRef.current = next.revision ?? revisionRef.current;
+                setLab(next);
+              }}
+            />
           </div>
         </section>
       </div>

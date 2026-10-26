@@ -8,6 +8,7 @@ is reported as a note instead of a cable.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import re
 from dataclasses import dataclass, field
 
@@ -101,6 +102,9 @@ def infer(devices: dict[str, tuple[str, str]]) -> Inference:
             remote_name = canonical_interface(remote_iface)
             if parsed[name].get(local_name) is None:
                 continue
+            # CDP and LLDP pastes do not suggest a cable when either end is a host.
+            if _looks_like_host(devices[name][0]) or _looks_like_host(devices[remote][0]):
+                continue
             add(
                 Suggestion(
                     name,
@@ -142,6 +146,8 @@ def infer(devices: dict[str, tuple[str, str]]) -> Inference:
             f"{network} is shared by {where}. Not turned into a cable."
         )
 
+    _suggest_host_cables(devices, add)
+
     links: list[Suggestion] = []
     for key, items in found.items():
         sources = []
@@ -164,6 +170,208 @@ def infer(devices: dict[str, tuple[str, str]]) -> Inference:
         )
     links.sort(key=lambda item: item.key)
     return Inference(links=links, notes=notes)
+
+
+def _suggest_host_cables(devices: dict[str, tuple[str, str]], add) -> None:
+    """Suggest a host cable from an access VLAN plus a matching description.
+
+    CDP and LLDP do not list hosts. A suggestion is added only when the host
+    address sits in that access VLAN's subnet and exactly one switch port's
+    description matches the host. Anything else stays a manual cable.
+    """
+    blocks = {name: _interface_blocks(config) for name, (config, _neighbor) in devices.items()}
+    vlan_nets: dict[int, list[ipaddress.IPv4Network]] = {}
+    for name, rows in blocks.items():
+        if _looks_like_host(devices[name][0]):
+            continue
+        for row in rows:
+            network = _block_network(row)
+            if network is None:
+                continue
+            vlan_id = _vlan_number(row["name"])
+            if vlan_id is None and row["dot1q"] is not None:
+                vlan_id = row["dot1q"]
+            if vlan_id is None:
+                continue
+            vlan_nets.setdefault(vlan_id, [])
+            if network not in vlan_nets[vlan_id]:
+                vlan_nets[vlan_id].append(network)
+
+    hosts: list[tuple[str, dict]] = []
+    access: list[tuple[str, dict]] = []
+    for name, (config, _neighbor) in devices.items():
+        if _looks_like_host(config):
+            for row in blocks[name]:
+                if row["address"] and row["name"].startswith("Ethernet"):
+                    hosts.append((name, row))
+            continue
+        for row in blocks[name]:
+            if row["mode"] == "trunk" or row["access_vlan"] is None:
+                continue
+            if not row["name"].startswith(("GigabitEthernet", "TenGigabitEthernet", "FastEthernet", "Ethernet")):
+                continue
+            access.append((name, row))
+
+    candidates: list[tuple[str, dict, str, dict, int, ipaddress.IPv4Network]] = []
+    for host, host_row in hosts:
+        try:
+            address = ipaddress.ip_address(host_row["address"])
+        except ValueError:
+            continue
+        for switch, port in access:
+            if not _description_matches(host, port["description"]):
+                continue
+            vlan_id = port["access_vlan"]
+            for network in vlan_nets.get(vlan_id, []):
+                if address in network:
+                    candidates.append((host, host_row, switch, port, vlan_id, network))
+                    break
+
+    host_hits: dict[str, int] = {}
+    port_hits: dict[tuple[str, str], int] = {}
+    for host, _host_row, switch, port, _vlan_id, _network in candidates:
+        host_hits[host] = host_hits.get(host, 0) + 1
+        key = (switch.lower(), port["name"].lower())
+        port_hits[key] = port_hits.get(key, 0) + 1
+    for host, host_row, switch, port, vlan_id, network in candidates:
+        if host_hits[host] != 1 or port_hits[(switch.lower(), port["name"].lower())] != 1:
+            continue
+        add(
+            Suggestion(
+                host,
+                host_row["name"],
+                switch,
+                port["name"],
+                "host",
+                (
+                    f"{host} {host_row['address']} is in VLAN {vlan_id} ({network}); "
+                    f"{switch} {port['name']} description matches {host}"
+                ),
+            )
+        )
+
+
+def _looks_like_host(config: str) -> bool:
+    """A host has a default gateway and is not a router or a switch.
+
+    Switch commands sit indented under an interface, so a column-0 search
+    misses them. A vlan definition, an SVI, or any switchport line means
+    this device is not a host, even when it also has ``ip default-gateway``.
+    """
+    if not re.search(r"(?im)^ip\s+default-gateway\s+\d", config):
+        return False
+    if re.search(r"(?im)^ip\s+routing\s*$", config):
+        return False
+    for raw in config.replace("\r\n", "\n").split("\n"):
+        line = raw.strip()
+        if not line or line.startswith("!"):
+            continue
+        if re.match(r"(?i)^(?:no\s+)?switchport\b", line):
+            return False
+        if re.match(r"(?i)^vlan\s+(?:\d+|access-map\b|filter\b)", line):
+            return False
+        if re.match(r"(?i)^interface\s+vlan\d+\b", line):
+            return False
+    return True
+
+
+def _description_matches(host: str, description: str) -> bool:
+    """True when the port description names this host, not merely the VLAN."""
+    if not description.strip():
+        return False
+    folded_host = host.casefold()
+    folded_desc = description.casefold()
+    if len(folded_host) >= 3 and folded_host in folded_desc:
+        return True
+    words = [word for word in re.split(r"[^a-z0-9]+", folded_desc) if word]
+    wordset = set(words)
+    numbers = {int(word) for word in words if word.isdigit()}
+    parts = [part for part in re.split(r"[^a-z0-9]+", folded_host) if part]
+    alpha = [part for part in parts if not part.isdigit() and len(part) >= 3]
+    nums = [int(part) for part in parts if part.isdigit()]
+    if not alpha:
+        return False
+    for token in alpha:
+        if token in wordset:
+            continue
+        if len(token) >= 4 and any(word.startswith(token) for word in wordset):
+            continue
+        return False
+    if nums and not all(number in numbers for number in nums):
+        return False
+    return True
+
+
+def _interface_blocks(config: str) -> list[dict]:
+    rows: list[dict] = []
+    current: dict | None = None
+
+    def close() -> None:
+        nonlocal current
+        if current is not None:
+            rows.append(current)
+            current = None
+
+    for raw in config.replace("\r\n", "\n").split("\n"):
+        line = raw.strip()
+        if not line or line.startswith("!"):
+            continue
+        iface = re.match(r"(?i)^interface\s+(\S+)", line)
+        if iface:
+            close()
+            current = {
+                "name": canonical_interface(iface.group(1)),
+                "description": "",
+                "mode": "",
+                "access_vlan": None,
+                "address": None,
+                "mask": None,
+                "dot1q": None,
+            }
+            continue
+        if current is None:
+            continue
+        desc = re.match(r"(?i)^description\s+(.+)$", line)
+        if desc:
+            current["description"] = desc.group(1).strip()
+            continue
+        mode = re.match(r"(?i)^switchport\s+mode\s+(access|trunk)\s*$", line)
+        if mode:
+            current["mode"] = mode.group(1).lower()
+            continue
+        vlan = re.match(r"(?i)^switchport\s+access\s+vlan\s+(\d+)\s*$", line)
+        if vlan:
+            current["access_vlan"] = int(vlan.group(1))
+            continue
+        encap = re.match(r"(?i)^encapsulation\s+dot1[qQ]\s+(\d+)\s*$", line)
+        if encap:
+            current["dot1q"] = int(encap.group(1))
+            continue
+        addr = re.match(
+            r"(?i)^ip\s+address\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)",
+            line,
+        )
+        if addr and "secondary" not in line.lower():
+            current["address"] = addr.group(1)
+            current["mask"] = addr.group(2)
+    close()
+    return rows
+
+
+def _block_network(row: dict) -> ipaddress.IPv4Network | None:
+    if not row.get("address") or not row.get("mask"):
+        return None
+    try:
+        return ipaddress.ip_network(f"{row['address']}/{row['mask']}", strict=False)
+    except ValueError:
+        return None
+
+
+def _vlan_number(name: str) -> int | None:
+    match = re.fullmatch(r"(?i)vlan(\d+)", name)
+    if not match:
+        return None
+    return int(match.group(1))
 
 
 def _resolve_device(token: str, names: list[str]) -> str | None:

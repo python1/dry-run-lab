@@ -124,6 +124,8 @@ Data, the jar, and the virtualenv live in that directory. Logs are `ensure.log`,
 
 ```bash
 bin/dryrun-lab load examples/office-lab
+bin/dryrun-lab device add R2 --role router --config configs/R2.cfg
+bin/dryrun-lab device add SW4 --role switch --config configs/SW4.cfg --neighbors neighbors/SW4.txt
 bin/dryrun-lab devices
 bin/dryrun-lab links
 bin/dryrun-lab confirm LINK_ID
@@ -142,6 +144,20 @@ bin/dryrun-lab show R1 "traceroute 10.255.1.1 source 10.50.0.1"
 bin/dryrun-lab host list
 bin/dryrun-lab link list
 ```
+
+`load <folder>` is the normal way to open a lab, including a customer pack. The office example is one folder of that shape, not a separate kind of load. The folder contains `topology.json`, a config file for each device, and optional neighbor pastes:
+
+```text
+my-lab/
+  topology.json
+  configs/EDGE1.cfg
+  configs/CORE1.cfg
+  neighbors/EDGE1.txt
+```
+
+`topology.json` lists each device with `file`, `role` (`router`, `switch`, or `host`), optional `neighbors`, and optional `x` and `y`. A host entry uses the same file layout: `Ethernet0`, an address, and `ip default-gateway`.
+
+`device add NAME --role router|switch --config FILE` adds one router or switch and reads that config on this machine. `--neighbors FILE` attaches a CDP or LLDP paste. That is the shell equivalent of **+ Router** and **+ Switch**.
 
 `status` prints whether the engine is up, the lab name, and the device, link, and warning counts.
 
@@ -181,6 +197,12 @@ Supported device-CLI commands: `show running-config`, `show ip interface brief`,
 `show access-lists` always prints sequence numbers (`10`, `20`, `30`, …). A line typed in `ip access-list` mode without a number is appended and gets the last sequence plus 10. A line that starts with a number is inserted at that sequence. From IOS-XE 16.12, sequence numbers are nvgened: `show running-config` and the config panel show a sequence number on every ACL entry. Remarks are numbered on 16.12 and later. That remark behavior is unconfirmed. On an older version line, `show running-config` prints the ACL entries without sequence numbers. The saved config keeps a number when you typed it, when `ip access-list resequence` wrote it, or when leaving it off would assign a different sequence on the next read, which happens after an earlier line is removed. A router or a switch with no `version` line uses the 16.12 behavior and shows `No version line found; assuming IOS-XE 16.12 or later`. A host does not show that note. `no 25` and `no deny ip …` remove an entry. `ip access-list resequence NAME START STEP` renumbers that list and stores the new numbers. A resequence command this lab does not apply is left in the config and reported as not simulated. A new entry that can never match, because an earlier line already matches everything it would, is called out when the edit is committed, including in the Warnings section of the change summary.
 
 A host is an end device: one interface address and `ip default-gateway`. Add one from the shell, or with **+ Host** on the page. The page requires the name, the IP address, the mask, and the gateway. A new host starts below the other cards. `link add` moves it under the switch or router that cable attaches to, so a server cabled to SW3 sits with SW3. On the canvas, click one port dot and then the other port dot to draw a cable. Click the cable itself to remove it. Drawing, removing, confirming, or rejecting a cable prints the same recompute summary: a first line (`Cabled`, `Removed`, `Confirmed`, or `Rejected`), then Routes, Warnings, and Reachability. While that recompute runs, the page says `Adding cable…`, `Removing cable…`, `Confirming cable…`, or `Rejecting cable…` and ignores a second click. Dragging a card moves the device.
+
+CDP and LLDP pastes do not suggest host cables. A host cable is suggested when the host address is in an access VLAN's subnet and that switch port's description matches the host (the host name is in the description, or the description's words and number match, such as `POS register 1` for `POS-01`). Confirm it like any other suggestion. If the description does not match, draw the cable yourself with the port dots or `link add`. A switch that has `ip default-gateway` is still a switch when the config contains switchport or vlan commands, including the indented switchport lines on an access port. The page refreshes on its own when the lab changes through the CLI or the API.
+
+Cable labels say `confirmed` or `suggested`. A solid green line is confirmed. A dashed orange line is suggested. A red count on a device is lines that were not simulated. An orange `ignored` badge means `ip default-gateway` was ignored because `ip routing` is enabled.
+
+The config panel hides passwords, secrets, SNMP communities, and authentication keys for OSPF, BGP, NTP, ISAKMP, HSRP, TACACS, and RADIUS, including a `key` line under `tacacs server` or `radius server`. That mask is on by default, including in the device CLI output, so a screenshot of the page does not show them. Turn **Mask secrets** off to read or edit those lines. Saving while the mask is on keeps the real config.
 
 ```bash
 bin/dryrun-lab host add PC40 --ip 10.40.40.50/24 --gw 10.40.40.1
@@ -227,15 +249,16 @@ One router (router-on-a-stick, OSPF on a `/30`, one extended ACL) and three swit
 
 Each example device contains `ip default-gateway`. The lab reads that device's config: if `ip routing` is enabled, the line is **ignored when ip routing is enabled** (R1 and SW1). On a switch with `ip routing` off (SW2 and SW3), the gateway is used for traffic that starts on the switch, and `show ip route` prints `Default gateway is 10.99.0.1`. Typing `hostname` replaces that line and the prompt. The device keeps its name in the lab, so its routes stay with that device.
 
-Lines that can change forwarding, and that this lab does not apply, are listed as **not simulated**. That group is `spanning-tree` (including `spanning-tree mode rapid-pvst` and `spanning-tree portfast`), `storm-control`, `switchport port-security`, `switchport block`, `ip dhcp snooping`, `ip arp inspection`, `ip verify unicast`, `channel-group`, `udld`, `mac access-group`, `policy-map`, `class-map`, `service-policy`, `mls qos`, and `vtp mode`. The office access ports include `spanning-tree portfast`, so those lines show up on SW2 and SW3. Each copy is its own warning. SW2 has the line on Gi0/10, Gi0/11, and Gi0/20, and each of those lines is flagged. The warning file is `configs/SW2.cfg`, the same path as the other warnings for that device. The same text on another interface or another device is not folded into the first one.
+Lines that can change forwarding, and that this lab does not apply, are listed as **not simulated**. That group is `spanning-tree` (including `spanning-tree mode rapid-pvst` and `spanning-tree portfast`), `storm-control`, `switchport port-security`, `switchport block`, `switchport voice`, `ip dhcp snooping`, `ip arp inspection`, `ip verify unicast`, `ip helper-address`, `ip nat`, `ip directed-broadcast`, `ip policy route-map`, `standby`, `vrrp`, `glbp`, `channel-group`, `udld`, `mac access-group`, `policy-map`, `class-map`, `service-policy`, `mls qos`, `vtp mode`, `vlan access-map`, `vlan filter`, `dot1x`, `mab`, and `authentication port-control`. The office access ports include `spanning-tree portfast`, so those lines show up on SW2 and SW3. Each copy is its own warning. SW2 has the line on Gi0/10, Gi0/11, and Gi0/20, and each of those lines is flagged. The same `ip helper-address` on two SVIs is two warnings. The warning file is `configs/SW2.cfg`, the same path as the other warnings for that device. The same text on another interface or another device is not folded into the first one. Typing `ip helper-address` in config mode keeps the line. At global config the prompt says it was not simulated. Under an interface the prompt stays quiet and the warning appears when the edit is committed.
 
 Lines with no effect on the forwarding this lab computes are kept and are not flagged. That group is `logging` (including `logging host`), `snmp-server`, `ntp`, `banner`, `username`, `enable secret`, `enable password`, `line`, `alias`, `service`, `clock`, `boot`, `license`, `archive`, `parser`, and `ip domain`.
 
 ## What this stage computes
 
 - A canvas for routers, switches, hosts, and interface-to-interface cables
-- Link suggestions from interface descriptions, pasted CDP or LLDP text, and a shared `/30` with exactly two physical interfaces, plus confirm and dismiss
-- Hosts and cables from the page or from `host add` and `link add`, and `link unconfirm` to make a confirmed cable suggested again
+- Link suggestions from interface descriptions, pasted CDP or LLDP text, a shared `/30` with exactly two physical interfaces, and a host cable when the host address is in an access VLAN and the port description matches, plus confirm and dismiss
+- Hosts and cables from the page or from `host add`, `device add`, and `link add`, and `link unconfirm` to make a confirmed cable suggested again
+- A page that refreshes when the lab changes through the CLI or the API
 - Per-device config paste, with parse warnings kept visible
 - Device CLI: `show running-config`, `show ip interface brief`, `show ip route`, `show vlan brief`, `show interfaces trunk`, `show access-lists`, `show ip ospf neighbor`, `show warnings`, `ping`, `traceroute`, `configure terminal`, and `revert`
 - The same actions from `dryrun-lab`
@@ -272,6 +295,14 @@ python3 -m venv .venv
 ```
 
 `tests/test_engine_office.py` runs only when something is already listening on `127.0.0.1:9996`. The lab install does not pull a test runner.
+
+`pytest` also runs the frontend mask and cable checks when `node` is 22.6 or newer. Those scripts need Node's type stripping, which arrived in 22.6. An older Node, or no `node` on `PATH`, skips that one test and prints the command below. Run the same checks by themselves from `frontend/`:
+
+```bash
+cd frontend && npm test
+```
+
+`npm test` runs `node --experimental-strip-types src/mask.test.ts` and `node --experimental-strip-types src/cables.test.ts`.
 
 ## Assistant template
 

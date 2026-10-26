@@ -371,6 +371,23 @@ def show_access_lists(config: str, interfaces: list[dict[str, Any]]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+_FALSE_L2_STOP = "Stops here. No confirmed link carries this VLAN to the gateway."
+_PING_SUCCESS = {"ACCEPTED", "DELIVERED_TO_SUBNET", "EXITS_NETWORK"}
+
+
+def _visible_l2(trace: dict[str, Any]) -> str | None:
+    """Layer-2 note to print. A successful ping never keeps the false stop line."""
+    raw = trace.get("l2")
+    if not raw:
+        return None
+    text = str(raw)
+    if str(trace.get("disposition") or "").upper() not in _PING_SUCCESS:
+        return text
+    lines = [line for line in text.splitlines() if _FALSE_L2_STOP not in line]
+    kept = "\n".join(lines).strip()
+    return kept or None
+
+
 def format_ping(dst: str, src: str | None, ingress: str | None, trace: dict[str, Any], drop: str | None) -> str:
     ok = trace.get("disposition") in {"ACCEPTED", "DELIVERED_TO_SUBNET", "EXITS_NETWORK"}
     where = f"to {dst}"
@@ -389,8 +406,9 @@ def format_ping(dst: str, src: str | None, ingress: str | None, trace: dict[str,
     ]
     if drop:
         lines.append(drop.rstrip("\n"))
-    if trace.get("l2"):
-        lines.append(str(trace["l2"]))
+    l2 = _visible_l2(trace)
+    if l2:
+        lines.append(l2)
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -409,8 +427,9 @@ def format_traceroute(dst: str, src: str | None, ingress: str | None, trace: dic
     ]
     if drop:
         lines.append(drop.rstrip("\n"))
-    if trace.get("l2"):
-        lines.append(str(trace["l2"]))
+    l2 = _visible_l2(trace)
+    if l2:
+        lines.append(l2)
     return "\n".join(lines).rstrip() + "\n"
 
 

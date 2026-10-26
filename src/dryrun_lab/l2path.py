@@ -95,9 +95,16 @@ def _segment(lab: Lab, interfaces: dict[str, list[dict[str, Any]]], name: str) -
     hops: list[tuple[str, str]] = [(host.name, addressed.name), (_display(lab, switch), port)]
     visited = {host.name.lower(), switch.lower()}
     blocked: str | None = None
+    reached = hops
     queue: list[tuple[str, str, list[tuple[str, str]]]] = [(switch, port, hops)]
     while queue:
         device, arrived, path = queue.pop(0)
+        if len(path) > len(reached):
+            reached = path
+        svi = _gateway_svi(lab, device, vlan, gateway, interfaces)
+        if svi:
+            done = path + [(_display(lab, device), svi)]
+            return f"VLAN {vlan}: {_format(done)}"
         exits = _ports(interfaces, device, vlan, include_down=True)
         if not exits:
             continue
@@ -144,7 +151,7 @@ def _segment(lab: Lab, interfaces: dict[str, list[dict[str, Any]]], name: str) -
     if blocked:
         return blocked
     return (
-        f"VLAN {vlan}: {_format(hops)}. "
+        f"VLAN {vlan}: {_format(reached)}. "
         "Stops here. No confirmed link carries this VLAN to the gateway."
     )
 
@@ -160,12 +167,63 @@ def _host_owning(lab: Lab, address: str) -> Any:
         if device.role != "host":
             continue
         for iface in parse_config(device.config).interfaces:
-            if not iface.address or iface.prefix is None:
-                continue
-            network = ipaddress.ip_network(f"{iface.address}/{iface.prefix}", strict=False)
-            if target in network:
+            if iface.address and iface.address == str(target):
                 return device
     return None
+
+
+def _gateway_svi(
+    lab: Lab,
+    device: str,
+    vlan: int,
+    gateway: str,
+    interfaces: dict[str, list[dict[str, Any]]],
+) -> str | None:
+    """SVI name when this device owns the gateway for the VLAN.
+
+    A multilayer switch answers on ``interface VlanN``, not on a router
+    subinterface. The walk used to miss that and report a stop at the access
+    port even when a confirmed trunk carried the VLAN to the switch.
+    """
+    name = f"Vlan{vlan}"
+    row = _row(interfaces, device, name)
+    if row is not None and not _up(row):
+        return None
+    found = lab.device(device)
+    if found is None:
+        return None
+    current: str | None = None
+    address: str | None = None
+    shutdown = False
+    matched: str | None = None
+
+    def close() -> None:
+        nonlocal matched
+        if current and current.lower() == name.lower() and address == gateway and not shutdown:
+            matched = current
+
+    for raw in found.config.replace("\r\n", "\n").split("\n"):
+        line = raw.strip()
+        iface = re.match(r"(?i)^interface\s+(\S+)", line)
+        if iface:
+            close()
+            current = canonical_interface(iface.group(1))
+            address = None
+            shutdown = False
+            continue
+        if current is None:
+            continue
+        if re.fullmatch(r"(?i)shutdown", line):
+            shutdown = True
+            continue
+        if re.fullmatch(r"(?i)no\s+shutdown", line):
+            shutdown = False
+            continue
+        addr_match = _ADDRESS.match(line)
+        if addr_match:
+            address = addr_match.group(1)
+    close()
+    return matched
 
 
 def _gateway_subinterface(lab: Lab, device: str, parent: str, vlan: int, gateway: str) -> str | None:
