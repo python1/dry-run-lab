@@ -10,6 +10,10 @@ Results are **computed, not proof**. Computed results are a simulation from thes
 
 **Support this project:** https://buymeacoffee.com/python1
 
+## Use it in Grok Bot
+
+Open [https://x.ai/bot/dnCnydyRm8J_xYeekmVCp](https://x.ai/bot/dnCnydyRm8J_xYeekmVCp), Add Bot, and say hi. It installs and walks you through it.
+
 ## Supported commands
 
 The device CLI computes these:
@@ -75,7 +79,7 @@ Confirming or rejecting a suggested cable recomputes and prints the same routes,
 
 ## Get the code
 
-Once this repository is public, a fresh install is a clone of `main` or a source archive of that branch. No GitHub Release is published yet, so there is no release asset to download.
+A fresh install is a clone of `main` or a source archive of that branch.
 
 The checkout is the directory that contains `ensure-running`, `bin/dryrun-lab`, and `examples/office-lab`.
 
@@ -96,7 +100,7 @@ tar -xzf dry-run-lab-main.tar.gz
 cd dry-run-lab-main
 ```
 
-When a release is published, GitHub attaches Source code (zip) and Source code (tar.gz) to that release. The archive URL will look like `https://github.com/python1/dry-run-lab/archive/refs/tags/<tag>.tar.gz`, with `<tag>` replaced by the published tag. That URL is a pattern, not a file that exists today. There is no named installer and no prebuilt engine archive.
+The prerelease [v0.1.0-beta](https://github.com/python1/dry-run-lab/releases/tag/v0.1.0-beta) is published. GitHub attaches Source code (zip) and Source code (tar.gz) to that release: `https://github.com/python1/dry-run-lab/archive/refs/tags/v0.1.0-beta.tar.gz` and `https://github.com/python1/dry-run-lab/archive/refs/tags/v0.1.0-beta.zip`. There is no named installer and no prebuilt engine archive.
 
 The source archive contains the example configs and the built page. It does not contain a virtualenv or the analysis engine.
 
