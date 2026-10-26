@@ -34,6 +34,24 @@ BEHAVIOR_UNMODELED = (
     re.compile(r"(?i)^mls\s+qos\b"),
     re.compile(r"(?i)^vtp\s+mode\b"),
     re.compile(r"(?i)^ip\s+nat\b"),
+    # DHCP relay, first-hop redundancy, policy routing, voice VLAN, VACLs,
+    # directed broadcast, and 802.1X change forwarding and this lab does not
+    # apply them. The same text on two SVIs is two warnings.
+    re.compile(r"(?i)^(?:no\s+)?ip\s+helper-address\b"),
+    re.compile(r"(?i)^(?:no\s+)?standby\b"),
+    re.compile(r"(?i)^(?:no\s+)?vrrp\b"),
+    re.compile(r"(?i)^(?:no\s+)?glbp\b"),
+    re.compile(r"(?i)^(?:no\s+)?ip\s+policy\s+route-map\b"),
+    re.compile(r"(?i)^(?:no\s+)?switchport\s+voice\b"),
+    re.compile(r"(?i)^(?:no\s+)?ip\s+directed-broadcast\b"),
+    re.compile(r"(?i)^vlan\s+access-map\b"),
+    re.compile(r"(?i)^vlan\s+filter\b"),
+    re.compile(r"(?i)^(?:no\s+)?dot1x\b"),
+    re.compile(r"(?i)^(?:no\s+)?mab\b"),
+    re.compile(
+        r"(?i)^(?:no\s+)?authentication\s+"
+        r"(?:port-control|host-mode|order|priority|periodic|timer|violation|event)\b"
+    ),
 )
 
 # No effect on the forwarding this lab computes. Not flagged.

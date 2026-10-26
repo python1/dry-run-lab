@@ -141,6 +141,7 @@ def _payload() -> dict:
     body["credit"] = CREDIT
     body["version"] = version()
     body["engineUp"] = _engine.healthy()
+    body["revision"] = _store.revision
     return body
 
 
@@ -160,6 +161,12 @@ def health() -> dict:
 def get_lab() -> dict:
     with _store.lock:
         return _payload()
+
+
+@app.get("/api/lab/revision")
+def lab_revision() -> dict:
+    """Small poll target so the page can see a CLI or API change."""
+    return {"revision": _store.revision}
 
 
 @app.post("/api/lab/load-example")
@@ -437,13 +444,16 @@ def _summarize(lab, mutate, headline: str, extra: list) -> str:
 
 
 def _placed(body: DeviceIn, lab) -> tuple[float, float]:
-    if body.x is not None and body.y is not None:
-        return body.x, body.y
     if body.role == "host":
-        x, y = place_host(lab)
+        fallback_x, fallback_y = place_host(lab)
     else:
-        x, y = 120.0, 120.0
-    return body.x if body.x is not None else x, body.y if body.y is not None else y
+        count = sum(1 for device in lab.devices if device.role != "host")
+        fallback_x = 120.0 + (count % 4) * 360.0
+        fallback_y = 80.0 + (count // 4) * 300.0
+    return (
+        body.x if body.x is not None else fallback_x,
+        body.y if body.y is not None else fallback_y,
+    )
 
 
 def _blank_config(name: str, role: str) -> str:
@@ -491,7 +501,11 @@ def _static_response(path: str) -> FileResponse:
     rel = path.lstrip("/")
     target = (root / rel).resolve() if rel else index
     if target != root and root not in target.parents:
-        raise HTTPException(404)
+        raise HTTPException(404, "No such file")
+    if rel == "assets" or rel.startswith("assets/"):
+        if not target.is_file():
+            raise HTTPException(404, "No such file")
+        return FileResponse(target, headers={"Cache-Control": _cache_control(target, index)})
     served = target if rel and target.is_file() else index
     return FileResponse(served, headers={"Cache-Control": _cache_control(served, index)})
 

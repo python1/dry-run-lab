@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Device, Lab, Link } from "../types";
+import { layoutCables, type Rect } from "../cables";
+import type { Device, Lab } from "../types";
 import { Button } from "./ui/button";
 
 const CARD_W = 300;
@@ -232,9 +233,13 @@ export function Topology({
       <div className="flex h-full items-center justify-center px-8 text-center">
         <div>
           <p className="font-serif text-2xl text-paper">Empty bench</p>
-          <p className="mx-auto mt-2 max-w-sm text-sm text-muted">
-            Add a router or a switch, paste a config, or load the office lab. Cables you have not
+          <p className="mx-auto mt-2 max-w-md text-sm text-muted">
+            Add a router or a switch, paste a config, or load a lab folder. Cables you have not
             confirmed stay dashed.
+          </p>
+          <p className="mx-auto mt-2 max-w-md text-sm text-muted">
+            CDP does not suggest a host cable. One is suggested when the host address is in an access
+            VLAN subnet and the switch port description matches the host. Otherwise draw that cable.
           </p>
         </div>
       </div>
@@ -244,6 +249,9 @@ export function Topology({
   return (
     <div className="relative h-full w-full">
       <div className="absolute right-3 top-3 z-10 flex gap-1">
+        <div className="mr-2 hidden rounded border border-line bg-ink/90 px-2 py-1 text-[11px] text-muted sm:block">
+          Solid green: confirmed. Dashed orange: suggested.
+        </div>
         <Button type="button" size="sm" variant="secondary" aria-label="Zoom in" onClick={() => zoomCenter(0.8)}>
           +
         </Button>
@@ -437,22 +445,6 @@ export function Topology({
   );
 }
 
-type Pt = { x: number; y: number };
-type Rect = { x: number; y: number; w: number; h: number };
-
-type CableLayout = {
-  id: string;
-  d: string;
-  color: string;
-  width: number;
-  dash?: string;
-  label: string;
-  labelX: number;
-  labelY: number;
-  labelW: number;
-  labelH: number;
-};
-
 function warningCaption(device: Device) {
   const ignored = device.unsimulated.filter((row) => row.kind === "ignored").length;
   const unreachable = device.unsimulated.filter((row) => row.kind === "unreachable").length;
@@ -464,131 +456,4 @@ function warningCaption(device: Device) {
   if (unreachable) parts.push(`${unreachable} will never match`);
   if (ignored) parts.push(`${ignored} ignored when ip routing is enabled`);
   return parts.join(" · ");
-}
-
-function insideAny(point: Pt, rects: Rect[]) {
-  return rects.some(
-    (rect) => point.x >= rect.x && point.x <= rect.x + rect.w && point.y >= rect.y && point.y <= rect.y + rect.h,
-  );
-}
-
-function linePoint(a: Pt, b: Pt, t: number): Pt {
-  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
-}
-
-function quadPoint(a: Pt, control: Pt, b: Pt, t: number): Pt {
-  const u = 1 - t;
-  return {
-    x: u * u * a.x + 2 * u * t * control.x + t * t * b.x,
-    y: u * u * a.y + 2 * u * t * control.y + t * t * b.y,
-  };
-}
-
-function visibleMid(sample: (t: number) => Pt, rects: Rect[]): Pt {
-  const outside: Pt[] = [];
-  for (let step = 0; step <= 48; step += 1) {
-    const point = sample(step / 48);
-    if (!insideAny(point, rects)) outside.push(point);
-  }
-  if (outside.length === 0) return sample(0.5);
-  return outside[Math.floor((outside.length - 1) / 2)];
-}
-
-function outwardNormal(a: Pt, b: Pt, rects: Rect[]): Pt {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const len = Math.hypot(dx, dy) || 1;
-  let nx = -dy / len;
-  let ny = dx / len;
-  if (rects.length === 0) return { x: nx, y: ny };
-  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-  const cx = rects.reduce((sum, rect) => sum + rect.x + rect.w / 2, 0) / rects.length;
-  const cy = rects.reduce((sum, rect) => sum + rect.y + rect.h / 2, 0) / rects.length;
-  if ((cx - mid.x) * nx + (cy - mid.y) * ny > 0) {
-    nx = -nx;
-    ny = -ny;
-  }
-  return { x: nx, y: ny };
-}
-
-function labelSize(text: string) {
-  return { w: Math.max(64, text.length * 7.6 + 16), h: 22 };
-}
-
-function boxesOverlap(box: Rect, rect: Rect) {
-  const pad = 6;
-  return !(
-    box.x + box.w < rect.x - pad ||
-    box.x > rect.x + rect.w + pad ||
-    box.y + box.h < rect.y - pad ||
-    box.y > rect.y + rect.h + pad
-  );
-}
-
-function placeLabel(anchor: Pt, normal: Pt, text: string, rects: Rect[]) {
-  const size = labelSize(text);
-  for (let step = 0; step < 18; step += 1) {
-    const x = anchor.x + normal.x * 18 * step;
-    const y = anchor.y + normal.y * 18 * step;
-    const box = { x: x - size.w / 2, y: y - size.h / 2, w: size.w, h: size.h };
-    if (!rects.some((rect) => boxesOverlap(box, rect))) return { x, y, ...size };
-  }
-  return { x: anchor.x + normal.x * 18 * 18, y: anchor.y + normal.y * 18 * 18, ...size };
-}
-
-function layoutCables(links: Link[], anchors: Map<string, Pt>, cards: Map<string, Rect>): CableLayout[] {
-  const groups = new Map<string, Link[]>();
-  for (const link of links) {
-    const key = [link.aDevice, link.bDevice].sort().join("\0");
-    const list = groups.get(key) ?? [];
-    list.push(link);
-    groups.set(key, list);
-  }
-  const cardRects = [...cards.values()];
-  const occupied: Rect[] = [...cardRects];
-  const laid: CableLayout[] = [];
-  for (const list of groups.values()) {
-    list.sort((left, right) =>
-      `${left.aInterface} ${left.bInterface}`.localeCompare(`${right.aInterface} ${right.bInterface}`),
-    );
-    list.forEach((link, index) => {
-      const a = anchors.get(`${link.aDevice}|${link.aInterface}`);
-      const b = anchors.get(`${link.bDevice}|${link.bInterface}`);
-      if (!a || !b) return;
-      const ends = [cards.get(link.aDevice), cards.get(link.bDevice)].filter((rect): rect is Rect => Boolean(rect));
-      const normal = outwardNormal(a, b, ends);
-      const curved = list.length > 1;
-      const bulge = curved ? 72 + index * 64 : 0;
-      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-      const control = { x: mid.x + normal.x * bulge, y: mid.y + normal.y * bulge };
-      const sample = (t: number) => (curved ? quadPoint(a, control, b, t) : linePoint(a, b, t));
-      const seen = visibleMid(sample, cardRects);
-      const stagger = (index - (list.length - 1) / 2) * 30;
-      const suggested = link.status === "suggested";
-      const down = Boolean(link.down);
-      const label = `${short(link.aInterface)}–${short(link.bInterface)} ${down ? "down" : suggested ? "suggested" : "link"}`;
-      const placed = placeLabel({ x: seen.x, y: seen.y + stagger }, normal, label, occupied);
-      occupied.push({
-        x: placed.x - placed.w / 2,
-        y: placed.y - placed.h / 2,
-        w: placed.w,
-        h: placed.h,
-      });
-      laid.push({
-        id: link.id,
-        d: curved
-          ? `M ${a.x} ${a.y} Q ${control.x} ${control.y} ${b.x} ${b.y}`
-          : `M ${a.x} ${a.y} L ${b.x} ${b.y}`,
-        color: down ? "#e15b45" : suggested ? "#e2a84a" : "#8fbf78",
-        width: down ? 3 : suggested ? 2 : 3.5,
-        dash: down ? "7 6" : suggested ? "8 6" : undefined,
-        label,
-        labelX: placed.x,
-        labelY: placed.y,
-        labelW: placed.w,
-        labelH: placed.h,
-      });
-    });
-  }
-  return laid;
 }

@@ -23,6 +23,11 @@ async function request(path: string, init?: RequestInit): Promise<Lab> {
 
 export const api = {
   lab: () => request("/api/lab"),
+  revision: async () => {
+    const response = await fetch("/api/lab/revision");
+    if (!response.ok) throw new Error("revision failed");
+    return response.json() as Promise<{ revision: number }>;
+  },
   health: async () => {
     const response = await fetch("/api/health");
     if (!response.ok) throw new Error("health failed");

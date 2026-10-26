@@ -50,6 +50,7 @@ export interface Lab {
   warnings: WarningRow[];
   engineError: string | null;
   engineUp: boolean;
+  revision?: number;
   unsimulatedCount: number;
   disclaimer: string;
   credit: string;
