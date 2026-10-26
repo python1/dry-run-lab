@@ -98,15 +98,19 @@ Open that URL on the same machine. The server listens on `127.0.0.1` only. The p
 
 Run `./ensure-running` again after a computer restart, and after an Update Bot's Computer wipe. If the engine is already up and a saved lab has not been computed in this process, the script reloads that lab and recomputes. You do not have to load the lab by hand before show commands work.
 
-`bin/start-dryrun-lab` runs that same starter from any directory. It does not need `DRYRUN_HOME`. After `./ensure-running` has recorded this checkout, the same command is on your `PATH` as `start-dryrun-lab`, and a **Start Dry Run Lab** icon is in the application menu. A desktop autostart entry runs it at login.
+`bin/start-dryrun-lab` runs that same starter from any directory. It does not need `DRYRUN_HOME`. After `./ensure-running` has recorded this checkout, the same command is on your `PATH` as `start-dryrun-lab`, in a login shell and in an ordinary terminal. A **Start Dry Run Lab** icon is in the application menu. This computer has no session manager, so a login autostart entry does not start the lab. The command and the icon are the recovery that works here.
 
 ### The page will not load
 
-The page is served at `http://127.0.0.1:8742` on this computer. When the window stays empty:
+The page is served at `http://127.0.0.1:8742` on this computer.
+
+When the server is down, the window stays empty:
 
 1. Run `start-dryrun-lab` from any directory, or double-click **Start Dry Run Lab**.
 2. Open `http://127.0.0.1:8742` again. A reload after the server is up shows the devices, the topology, and the terminal.
-3. If the icon is missing, run `./ensure-running` once from the repository directory. That records the checkout and installs the icon and the login autostart entry.
+3. If the icon is missing, run `./ensure-running` once from the repository directory. That records the checkout and installs the command and the icon.
+
+When the server is up and the window stays empty, the browser is showing a saved copy of the page script. Press Ctrl+Shift+R to reload. If the script still does not mount, the page says `The page didn't load. Press Ctrl+Shift+R to reload.`
 
 `DRYRUN_HOME` overrides the data directory for that command. `./ensure-running` records the directory it actually used in `.dryrun-home` in the checkout and in `$XDG_CONFIG_HOME/dryrun-lab/install-path` (`~/.config/dryrun-lab/install-path` when `XDG_CONFIG_HOME` is unset). Later shells do not need `DRYRUN_HOME`. `bin/dryrun-lab` reads the override, then the checkout record, then the user record, then `$HOME/.local/share/dryrun-lab`.
 

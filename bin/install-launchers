@@ -16,6 +16,26 @@ dryrun_install_launchers() {
   cp "$desktop" "$HOME/.local/share/applications/start-dryrun-lab.desktop"
   cp "$desktop" "${config_home}/autostart/start-dryrun-lab.desktop"
   rm -f "$desktop"
+  dryrun_path_for_shells
+}
+
+# Login shells already see ~/.local/bin from the usual profile. An ordinary
+# terminal is not a login shell, so it only reads ~/.bashrc.
+dryrun_path_for_shells() {
+  local bashrc="$HOME/.bashrc"
+  local marker="# dryrun-lab path"
+  if [[ -f "$bashrc" ]] && grep -q "$marker" "$bashrc"; then
+    return 0
+  fi
+  touch "$bashrc"
+  cat >>"$bashrc" <<'EOF'
+
+# dryrun-lab path
+case ":${PATH}:" in
+  *":${HOME}/.local/bin:"*) ;;
+  *) PATH="${HOME}/.local/bin:${PATH}" ;;
+esac
+EOF
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

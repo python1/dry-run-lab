@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import socket
 import subprocess
@@ -24,7 +25,14 @@ from dryrun_lab.ioscheck import (
 )
 from dryrun_lab.l2path import unattached_host
 from dryrun_lab.probes import Probe
-from dryrun_lab.showfmt import command_help, normalize_command, show_ip_route, show_vlan_brief
+from dryrun_lab.showfmt import (
+    _diff_warnings,
+    command_help,
+    normalize_command,
+    show_interfaces_trunk,
+    show_ip_route,
+    show_vlan_brief,
+)
 from dryrun_lab.store import Device, Lab
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -330,6 +338,15 @@ def test_autostart_entry_names_start_dry_run_lab(tmp_path: Path) -> None:
     assert os.access(installed, os.X_OK)
 
 
+def bundle_filename(content: bytes, stem: str = "index") -> str:
+    return f"{stem}-{hashlib.sha256(content).hexdigest()[:8]}.js"
+
+
+def test_bundle_name_changes_when_content_changes() -> None:
+    assert bundle_filename(b"broken") != bundle_filename(b"fixed")
+    assert bundle_filename(b"fixed") == bundle_filename(b"fixed")
+
+
 def test_page_script_parses() -> None:
     html = (ROOT / "src" / "dryrun_lab" / "static" / "index.html").read_text(encoding="utf-8")
     marker = 'src="/assets/'
@@ -337,10 +354,86 @@ def test_page_script_parses() -> None:
     src = html[start : html.index('"', start)]
     bundle = ROOT / "src" / "dryrun_lab" / "static" / src.lstrip("/")
     subprocess.check_call(["node", "--check", str(bundle)])
+    assert bundle.name == bundle_filename(bundle.read_bytes())
+    assert bundle.name != "index-NBzIT_bQ.js"
+    assert "index-NBzIT_bQ.js" not in html
     text = bundle.read_text(encoding="utf-8", errors="strict")
     assert "Confirming cable…" in text
     assert "Not affiliated with or endorsed by Cisco" in text
     assert "Created by Paul Charydczak" in text
+    assert 'data-mounted' in text
+    assert "The page didn't load. Press Ctrl+Shift+R to reload." in html
+
+
+def test_index_html_is_revalidated() -> None:
+    from dryrun_lab.server import _static_response
+
+    page = _static_response("")
+    assert page.headers["cache-control"] == "no-cache"
+    html = (ROOT / "src" / "dryrun_lab" / "static" / "index.html").read_text(encoding="utf-8")
+    marker = 'src="/assets/'
+    start = html.index(marker) + len('src="')
+    src = html[start : html.index('"', start)].lstrip("/")
+    asset = _static_response(src)
+    assert asset.headers["cache-control"] == "public, max-age=31536000, immutable"
+
+
+def test_non_login_shell_finds_the_start_command(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+    env["XDG_CONFIG_HOME"] = str(home / ".config")
+    env["PATH"] = "/usr/bin:/bin"
+    env.pop("DRYRUN_HOME", None)
+    subprocess.run(["bash", str(ROOT / "bin" / "install-launchers")], cwd=ROOT, env=env, check=True)
+    completed = subprocess.run(
+        ["bash", "-ic", "command -v start-dryrun-lab"],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    found = str(home / ".local" / "bin" / "start-dryrun-lab")
+    assert found in completed.stdout.splitlines()
+
+
+def test_trunk_block_lists_allowed_and_active_vlans() -> None:
+    text = show_interfaces_trunk(
+        [
+            {
+                "name": "GigabitEthernet1/0/1",
+                "mode": "TRUNK",
+                "allowed": "10,20,40-42",
+                "native": 99,
+                "active": True,
+                "admin_up": True,
+            }
+        ],
+        {10, 40, 41, 99},
+    )
+    assert "Vlans allowed on trunk" in text
+    assert "Vlans allowed and active in management domain" in text
+    assert "10,20,40-42" in text
+    assert "10,40-41" in text
+
+
+def test_shifted_warning_line_is_not_listed_twice() -> None:
+    def row(line: int, text: str = "spanning-tree portfast") -> dict:
+        return {
+            "device": "R1",
+            "file": "configs/R1.cfg",
+            "line": line,
+            "text": text,
+            "detail": "not simulated",
+            "kind": "missed",
+        }
+
+    assert _diff_warnings([row(24), row(31)], [row(25), row(32)]) == []
+    added = _diff_warnings([row(24)], [row(25), row(40, "ip nat inside")])
+    assert len(added) == 1
+    assert added[0].startswith("  + ")
+    assert "ip nat inside" in added[0]
 
 
 @pytest.mark.skipif(not _engine_up(), reason="analysis engine is not listening")

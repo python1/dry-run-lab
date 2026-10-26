@@ -473,6 +473,16 @@ def _check_name(name: str) -> None:
         raise HTTPException(400, "Use a short name: letters, digits, _ or -")
 
 
+_HASHED_ASSET = re.compile(r"-[A-Za-z0-9_-]{8,}\.")
+
+
+def _cache_control(served: Path, index: Path) -> str:
+    """index.html is revalidated. A hashed asset keeps its name only while its bytes do."""
+    if served.resolve() == index.resolve() or not _HASHED_ASSET.search(served.name):
+        return "no-cache"
+    return "public, max-age=31536000, immutable"
+
+
 def _static_response(path: str) -> FileResponse:
     root = static_dir().resolve()
     index = root / "index.html"
@@ -482,9 +492,8 @@ def _static_response(path: str) -> FileResponse:
     target = (root / rel).resolve() if rel else index
     if target != root and root not in target.parents:
         raise HTTPException(404)
-    if rel and target.is_file():
-        return FileResponse(target)
-    return FileResponse(index)
+    served = target if rel and target.is_file() else index
+    return FileResponse(served, headers={"Cache-Control": _cache_control(served, index)})
 
 
 @app.get("/")

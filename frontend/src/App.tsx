@@ -142,7 +142,7 @@ export default function App() {
   const ignored = unsimulated.filter((row) => row.kind === "ignored");
 
   return (
-    <div className="flex h-dvh w-screen flex-col overflow-hidden">
+    <div className="flex h-dvh w-screen flex-col overflow-hidden" data-mounted="">
       <header className="flex items-center justify-between gap-4 border-b border-line px-4 py-3">
         <div className="flex items-center gap-3">
           <Mark />

@@ -281,7 +281,8 @@ class Engine:
                 self._interfaces.get(key, []),
             )
         elif kind == "trunk":
-            body = show_interfaces_trunk(self._interfaces.get(key, []))
+            active = _active_vlans(self._vlans.get(key, []))
+            body = show_interfaces_trunk(self._interfaces.get(key, []), active)
         else:
             rows = self._routes.get(key, [])
             body = with_assumed(
@@ -1176,6 +1177,18 @@ def _interfaces(session: Any) -> dict[str, list[dict[str, Any]]]:
             }
         )
     return grouped
+
+
+def _active_vlans(rows: list[dict[str, Any]]) -> set[int]:
+    found: set[int] = set()
+    for row in rows:
+        try:
+            vlan = int(row.get("vlan"))
+        except (TypeError, ValueError):
+            continue
+        if 1 <= vlan <= 4094:
+            found.add(vlan)
+    return found
 
 
 def _vlans(session: Any) -> dict[str, list[dict[str, Any]]]:

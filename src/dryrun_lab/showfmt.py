@@ -250,7 +250,10 @@ def _vlan_hidden_ports(interfaces: list[dict[str, Any]] | None) -> set[str]:
     return hidden
 
 
-def show_interfaces_trunk(rows: list[dict[str, Any]]) -> str:
+def show_interfaces_trunk(
+    rows: list[dict[str, Any]],
+    active_vlans: set[int] | None = None,
+) -> str:
     trunks = [row for row in rows if str(row.get("mode") or "").upper() == "TRUNK"]
     trunks.sort(key=lambda row: interface_key(str(row.get("name") or "")))
     if not trunks:
@@ -270,7 +273,53 @@ def show_interfaces_trunk(rows: list[dict[str, Any]]) -> str:
     for row in trunks:
         allowed = row.get("allowed") or ""
         lines.append(f"{_short_interface(str(row.get('name') or '')):<18} {allowed}")
+    lines.append("")
+    lines.append(f"{'Port':<18} Vlans allowed and active in management domain")
+    for row in trunks:
+        allowed_ids = _expand_vlan_list(str(row.get("allowed") or ""))
+        active_ids = allowed_ids if active_vlans is None else allowed_ids & active_vlans
+        lines.append(f"{_short_interface(str(row.get('name') or '')):<18} {_format_vlan_list(active_ids)}")
     return "\n".join(lines) + "\n"
+
+
+def _expand_vlan_list(text: str) -> set[int]:
+    found: set[int] = set()
+    raw = text.strip()
+    if raw.lower() == "all":
+        return set(range(1, 4095))
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            left, right = part.split("-", 1)
+            if left.isdigit() and right.isdigit():
+                start, end = int(left), int(right)
+                if start > end:
+                    start, end = end, start
+                found.update(range(max(start, 1), min(end, 4094) + 1))
+            continue
+        if part.isdigit():
+            vlan = int(part)
+            if 1 <= vlan <= 4094:
+                found.add(vlan)
+    return found
+
+
+def _format_vlan_list(ids: set[int]) -> str:
+    ordered = sorted(ids)
+    if not ordered:
+        return "none"
+    ranges: list[str] = []
+    start = previous = ordered[0]
+    for vlan in ordered[1:]:
+        if vlan == previous + 1:
+            previous = vlan
+            continue
+        ranges.append(str(start) if start == previous else f"{start}-{previous}")
+        start = previous = vlan
+    ranges.append(str(start) if start == previous else f"{start}-{previous}")
+    return ",".join(ranges)
 
 
 def show_ip_ospf_neighbor(rows: list[dict[str, Any]]) -> str:
@@ -667,18 +716,42 @@ def _warning_key(row: dict[str, Any]) -> tuple[str, str, str, str, str, str]:
     )
 
 
+def _warning_identity(row: dict[str, Any]) -> tuple[str, str, str, str]:
+    """The warning itself, apart from the line number it currently occupies."""
+    return (
+        str(row.get("device") or ""),
+        str(row.get("text") or "").strip(),
+        str(row.get("detail") or "").strip(),
+        str(row.get("kind") or ""),
+    )
+
+
 def _diff_warnings(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> list[str]:
     old = {_warning_key(row): row for row in before}
     new = {_warning_key(row): row for row in after}
+    removed = [old[key] for key in old if key not in new]
+    added = [new[key] for key in new if key not in old]
+    # Inserting an ACL line shifts later line numbers. The same warning then
+    # looks removed and added. Pair those and leave them out of the summary.
+    used = [False] * len(added)
+    still_removed: list[dict[str, Any]] = []
+    for row in removed:
+        identity = _warning_identity(row)
+        match = next(
+            (index for index, other in enumerate(added) if not used[index] and _warning_identity(other) == identity),
+            None,
+        )
+        if match is None:
+            still_removed.append(row)
+        else:
+            used[match] = True
     lines: list[str] = []
-    for key in old:
-        if key not in new:
-            row = old[key]
-            lines.append(f"  - {row.get('device') or '?'} {row.get('text')} ({row.get('detail')})")
-    for key in new:
-        if key not in old:
-            row = new[key]
-            lines.append(f"  + {row.get('device') or '?'} {row.get('text')} ({row.get('detail')})")
+    for row in still_removed:
+        lines.append(f"  - {row.get('device') or '?'} {row.get('text')} ({row.get('detail')})")
+    for index, row in enumerate(added):
+        if used[index]:
+            continue
+        lines.append(f"  + {row.get('device') or '?'} {row.get('text')} ({row.get('detail')})")
     return lines
 
 
