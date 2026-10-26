@@ -2,9 +2,13 @@
 
 Created by Paul Charydczak.
 
-Dry Run Lab is a local simulator for a small vendor-style network. You draw routers and switches, paste a config on each device, and confirm the cables the lab inferred. Show commands are computed on this machine by [Batfish](https://github.com/batfish/batfish). Nothing is uploaded, and the lab never opens a session to a real device.
+**Status: beta.** Dry Run Lab is a local simulator for a small vendor-style network. You draw routers and switches, paste a config on each device, and confirm the cables the lab inferred. Show commands are computed on this machine by [Batfish](https://github.com/batfish/batfish). Nothing is uploaded, and the lab never opens a session to a real device.
 
-Computed results are a simulation from these configs. They are not proof that a live network will behave the same way. Not affiliated with or endorsed by Cisco.
+Results are **computed, not proof**. Computed results are a simulation from these configs. They are not proof that a live network will behave the same way, and they are not proof that a real device or another software release will match this beta. Not affiliated with or endorsed by Cisco.
+
+**License:** [Apache License 2.0](LICENSE). Third-party credits are in [`NOTICE`](NOTICE) and [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES).
+
+**Support this project:** https://buymeacoffee.com/python1
 
 ## Supported commands
 
@@ -28,6 +32,41 @@ The device CLI computes these:
 
 A `show` command this lab does not compute, such as `show version` or `show spanning-tree`, answers `% Not simulated in this version.` A command that is not a command answers `% Invalid input detected at '^' marker.` Pipes are refused.
 
+## What is not simulated
+
+This beta does not apply the forwarding and filtering lines in `BEHAVIOR_UNMODELED` (`src/dryrun_lab/ioscheck.py`). Each copy is kept and reported as **not simulated**. Where the pattern allows it, a leading `no` is included. The same text on another interface or another device is a separate warning.
+
+- `spanning-tree` (including `spanning-tree mode rapid-pvst` and `spanning-tree portfast`)
+- `storm-control`
+- `switchport port-security`
+- `switchport block`
+- `switchport voice`
+- `ip dhcp snooping`
+- `ip arp inspection`
+- `ip verify unicast`
+- `ip helper-address`
+- `ip nat`
+- `ip directed-broadcast`
+- `ip policy route-map`
+- `standby`
+- `vrrp`
+- `glbp`
+- `channel-group`
+- `udld`
+- `mac access-group`
+- `policy-map`, `class-map`, and `service-policy`
+- `mls qos`
+- `vtp mode`
+- `vlan access-map`
+- `vlan filter`
+- `dot1x`
+- `mab`
+- `authentication` followed by `port-control`, `host-mode`, `order`, `priority`, `periodic`, `timer`, `violation`, or `event`
+
+Lines with no effect on the forwarding this lab computes are kept and are not flagged. That group is `logging` (including `logging host`), `snmp-server`, `ntp`, `banner`, `username`, `enable secret`, `enable password`, `line`, `alias`, `service`, `clock`, `boot`, `license`, `archive`, `parser`, and `ip domain`.
+
+Show commands this lab does not compute also answer `% Not simulated in this version.` The list in `src/dryrun_lab/showfmt.py` includes `show version`, `show spanning-tree`, `show ip arp`, `show mac address-table`, `show cdp neighbors`, `show lldp neighbors`, `show inventory`, `show processes`, `show users`, `show logging`, `show clock`, `show ip protocols`, `show ip bgp`, `show ip ospf interface`, `show ip ospf database`, `show interfaces status`, `show ip interface`, and `show interfaces`. Any other `show` or `sh` command outside the supported list is the same answer. `show ip ospf neighbor` is computed. Pipes are refused.
+
 ## Cables on the page
 
 Click a port dot, then click the port dot on the other device. That draws the cable. Dragging a card moves the device. The port dot is the click target.
@@ -36,9 +75,11 @@ Confirming or rejecting a suggested cable recomputes and prints the same routes,
 
 ## Get the code
 
+Once this repository is public, a fresh install is a clone of `main` or a source archive of that branch. No GitHub Release is published yet, so there is no release asset to download.
+
 The checkout is the directory that contains `ensure-running`, `bin/dryrun-lab`, and `examples/office-lab`.
 
-When you can clone the repository:
+Clone:
 
 ```bash
 git clone https://github.com/python1/dry-run-lab.git
@@ -47,7 +88,7 @@ cd dry-run-lab
 
 The branch is `main`.
 
-When you cannot clone, download a source archive of `main` and unpack it. On GitHub that is Code, then Download ZIP, or the branch tarball:
+If you cannot clone, download a source archive of `main` and unpack it. On GitHub that is Code, then Download ZIP, or the branch tarball:
 
 ```bash
 curl -L -o dry-run-lab-main.tar.gz https://github.com/python1/dry-run-lab/archive/refs/heads/main.tar.gz
@@ -55,7 +96,9 @@ tar -xzf dry-run-lab-main.tar.gz
 cd dry-run-lab-main
 ```
 
-The same kind of archive is attached to a release when one is published (Source code zip or tar.gz). The archive contains the example configs and the built page. It does not contain a virtualenv or the analysis engine.
+When a release is published, GitHub attaches Source code (zip) and Source code (tar.gz) to that release. The archive URL will look like `https://github.com/python1/dry-run-lab/archive/refs/tags/<tag>.tar.gz`, with `<tag>` replaced by the published tag. That URL is a pattern, not a file that exists today. There is no named installer and no prebuilt engine archive.
+
+The source archive contains the example configs and the built page. It does not contain a virtualenv or the analysis engine.
 
 A GitHub source archive is produced by `git archive`, which stamps the commit into the tree. A folder of loose files, copied one by one, has no `.git` directory and no stamp.
 
@@ -249,7 +292,7 @@ One router (router-on-a-stick, OSPF on a `/30`, one extended ACL) and three swit
 
 Each example device contains `ip default-gateway`. The lab reads that device's config: if `ip routing` is enabled, the line is **ignored when ip routing is enabled** (R1 and SW1). On a switch with `ip routing` off (SW2 and SW3), the gateway is used for traffic that starts on the switch, and `show ip route` prints `Default gateway is 10.99.0.1`. Typing `hostname` replaces that line and the prompt. The device keeps its name in the lab, so its routes stay with that device.
 
-Lines that can change forwarding, and that this lab does not apply, are listed as **not simulated**. That group is `spanning-tree` (including `spanning-tree mode rapid-pvst` and `spanning-tree portfast`), `storm-control`, `switchport port-security`, `switchport block`, `switchport voice`, `ip dhcp snooping`, `ip arp inspection`, `ip verify unicast`, `ip helper-address`, `ip nat`, `ip directed-broadcast`, `ip policy route-map`, `standby`, `vrrp`, `glbp`, `channel-group`, `udld`, `mac access-group`, `policy-map`, `class-map`, `service-policy`, `mls qos`, `vtp mode`, `vlan access-map`, `vlan filter`, `dot1x`, `mab`, and `authentication port-control`. The office access ports include `spanning-tree portfast`, so those lines show up on SW2 and SW3. Each copy is its own warning. SW2 has the line on Gi0/10, Gi0/11, and Gi0/20, and each of those lines is flagged. The same `ip helper-address` on two SVIs is two warnings. The warning file is `configs/SW2.cfg`, the same path as the other warnings for that device. The same text on another interface or another device is not folded into the first one. Typing `ip helper-address` in config mode keeps the line. At global config the prompt says it was not simulated. Under an interface the prompt stays quiet and the warning appears when the edit is committed.
+Lines that can change forwarding, and that this lab does not apply, are listed as **not simulated**. That group is `spanning-tree` (including `spanning-tree mode rapid-pvst` and `spanning-tree portfast`), `storm-control`, `switchport port-security`, `switchport block`, `switchport voice`, `ip dhcp snooping`, `ip arp inspection`, `ip verify unicast`, `ip helper-address`, `ip nat`, `ip directed-broadcast`, `ip policy route-map`, `standby`, `vrrp`, `glbp`, `channel-group`, `udld`, `mac access-group`, `policy-map`, `class-map`, `service-policy`, `mls qos`, `vtp mode`, `vlan access-map`, `vlan filter`, `dot1x`, `mab`, and `authentication` with `port-control`, `host-mode`, `order`, `priority`, `periodic`, `timer`, `violation`, or `event`. The same list is under What is not simulated. The office access ports include `spanning-tree portfast`, so those lines show up on SW2 and SW3. Each copy is its own warning. SW2 has the line on Gi0/10, Gi0/11, and Gi0/20, and each of those lines is flagged. The same `ip helper-address` on two SVIs is two warnings. The warning file is `configs/SW2.cfg`, the same path as the other warnings for that device. The same text on another interface or another device is not folded into the first one. Typing `ip helper-address` in config mode keeps the line. At global config the prompt says it was not simulated. Under an interface the prompt stays quiet and the warning appears when the edit is committed.
 
 Lines with no effect on the forwarding this lab computes are kept and are not flagged. That group is `logging` (including `logging host`), `snmp-server`, `ntp`, `banner`, `username`, `enable secret`, `enable password`, `line`, `alias`, `service`, `clock`, `boot`, `license`, `archive`, `parser`, and `ip domain`.
 
@@ -314,4 +357,4 @@ A real computer restart, an Update Bot's Computer wipe, and a fresh assistant te
 
 ## License
 
-Apache License 2.0. See `LICENSE`, `NOTICE`, and `THIRD_PARTY_NOTICES`.
+Apache License 2.0. The terms are in [LICENSE](LICENSE). Attribution for Batfish, xterm.js, and the other third-party code is in [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).

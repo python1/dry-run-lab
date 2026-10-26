@@ -1,57 +1,96 @@
 Third-party software used by Dry Run Lab. Each component stays under its
 own license. This file is attribution, not a change of those terms.
+NOTICE is the same set of credits, including the Apache notice for Batfish.
 
 Batfish and pybatfish
   Copyright 2018 The Batfish Open Source Project
   Apache License, Version 2.0
   https://github.com/batfish/batfish
   The matching client wheel is taken from the official all-in-one image
-  so the client and the service are the same release. See NOTICE.
+  so the client and the service are the same release. Not copied into
+  this repository. `tools/fetch_batfish.py` downloads them at runtime.
+  See NOTICE.
 
 Jackson (shaded inside the Batfish all-in-one jar)
   Copyright 2007-, Tatu Saloranta
   Apache License, Version 2.0
-  Attribution also appears in the jar's META-INF/NOTICE.
+  Attribution also appears in the jar's META-INF/NOTICE. The jar is
+  downloaded at runtime and is not vendored here.
 
 FastAPI
   Copyright Sebastián Ramírez
   MIT License
   https://github.com/fastapi/fastapi
+  Declared in `pyproject.toml`. Installed into the virtualenv. Not copied
+  into this repository.
 
 Uvicorn
   Copyright Encode OSS Ltd
   BSD 3-Clause License
   https://github.com/encode/uvicorn
+  Declared in `pyproject.toml`. Installed into the virtualenv. Not copied
+  into this repository.
 
 React and React DOM
   Copyright Meta Platforms, Inc. and affiliates
   MIT License
   https://github.com/facebook/react
+  Bundled into `src/dryrun_lab/static/assets/`. The browser does not load
+  them from a network.
 
 xterm.js (@xterm/xterm and @xterm/addon-fit)
   Copyright xterm.js contributors
   MIT License
   https://github.com/xtermjs/xterm.js
-  The terminal assets are bundled with the app. The browser does not load
-  them from a network.
+  The device CLI (`frontend/src/components/DeviceCli.tsx`) uses the
+  terminal and the fit addon. The code and CSS are bundled into
+  `src/dryrun_lab/static/assets/`. The browser does not load them from a
+  network.
 
-Radix UI (dialog, slot)
+Radix UI (dialog, slot, and the Radix runtime packages those two import)
   Copyright WorkOS
   MIT License
   https://github.com/radix-ui/primitives
+  Bundled into `src/dryrun_lab/static/assets/`.
 
 Tailwind CSS
   Copyright Tailwind Labs, Inc.
   MIT License
   https://github.com/tailwindlabs/tailwindcss
+  The generated stylesheet is committed under `src/dryrun_lab/static/assets/`.
+  The compiler is a development tool and is not shipped.
 
-Lucide
+Lucide (lucide-react)
   ISC License
   https://github.com/lucide-icons/lucide
+  Icons imported by the page are bundled into `src/dryrun_lab/static/assets/`.
 
-class-variance-authority, clsx, tailwind-merge
+class-variance-authority
+  Apache License, Version 2.0
+  https://github.com/joe-bell/cva
+  Button variants. Bundled into `src/dryrun_lab/static/assets/`.
+
+clsx
   MIT License
+  https://github.com/lukeed/clsx
+  Class-name helper in `frontend/src/lib/utils.ts`. Bundled into
+  `src/dryrun_lab/static/assets/`.
 
-Vite, TypeScript, and the React plugin are development tools used to
-build the static UI. They are not required on a machine that only runs
-the lab.
+tailwind-merge
+  MIT License
+  https://github.com/dcastil/tailwind-merge
+  Class-name helper in `frontend/src/lib/utils.ts`. Bundled into
+  `src/dryrun_lab/static/assets/`.
+
+Vite
+  MIT License
+  https://github.com/vitejs/vite
+  Development tool used to build the static UI. The built script includes
+  Vite's modulepreload helper. The compiler is not required on a machine
+  that only runs the lab.
+
+TypeScript and the React plugin are development tools used to build the
+static UI. They are not required on a machine that only runs the lab.
+`frontend/package-lock.json` also records build-only packages, including
+lightningcss (MPL-2.0) and caniuse-lite (CC-BY-4.0). Those are not copied
+into the served page. `node_modules` is not in this repository.
