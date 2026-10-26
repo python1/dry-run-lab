@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 8743",
     "build": "vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types src/mask.test.ts && node --experimental-strip-types src/cables.test.ts"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",

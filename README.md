@@ -198,11 +198,11 @@ Supported device-CLI commands: `show running-config`, `show ip interface brief`,
 
 A host is an end device: one interface address and `ip default-gateway`. Add one from the shell, or with **+ Host** on the page. The page requires the name, the IP address, the mask, and the gateway. A new host starts below the other cards. `link add` moves it under the switch or router that cable attaches to, so a server cabled to SW3 sits with SW3. On the canvas, click one port dot and then the other port dot to draw a cable. Click the cable itself to remove it. Drawing, removing, confirming, or rejecting a cable prints the same recompute summary: a first line (`Cabled`, `Removed`, `Confirmed`, or `Rejected`), then Routes, Warnings, and Reachability. While that recompute runs, the page says `Adding cable…`, `Removing cable…`, `Confirming cable…`, or `Rejecting cable…` and ignores a second click. Dragging a card moves the device.
 
-CDP and LLDP pastes do not suggest host cables. A host cable is suggested when the host address is in an access VLAN's subnet and that switch port's description matches the host (the host name is in the description, or the description's words and number match, such as `POS register 1` for `POS-01`). Confirm it like any other suggestion. If the description does not match, draw the cable yourself with the port dots or `link add`. The page refreshes on its own when the lab changes through the CLI or the API.
+CDP and LLDP pastes do not suggest host cables. A host cable is suggested when the host address is in an access VLAN's subnet and that switch port's description matches the host (the host name is in the description, or the description's words and number match, such as `POS register 1` for `POS-01`). Confirm it like any other suggestion. If the description does not match, draw the cable yourself with the port dots or `link add`. A switch that has `ip default-gateway` is still a switch when the config contains switchport or vlan commands, including the indented switchport lines on an access port. The page refreshes on its own when the lab changes through the CLI or the API.
 
 Cable labels say `confirmed` or `suggested`. A solid green line is confirmed. A dashed orange line is suggested. A red count on a device is lines that were not simulated. An orange `ignored` badge means `ip default-gateway` was ignored because `ip routing` is enabled.
 
-The config panel hides passwords, secrets, and SNMP communities. That mask is on by default, including in the device CLI output, so a screenshot of the page does not show them. Turn **Mask secrets** off to read or edit those lines. Saving while the mask is on keeps the real config.
+The config panel hides passwords, secrets, SNMP communities, and authentication keys for OSPF, BGP, NTP, ISAKMP, HSRP, TACACS, and RADIUS, including a `key` line under `tacacs server` or `radius server`. That mask is on by default, including in the device CLI output, so a screenshot of the page does not show them. Turn **Mask secrets** off to read or edit those lines. Saving while the mask is on keeps the real config.
 
 ```bash
 bin/dryrun-lab host add PC40 --ip 10.40.40.50/24 --gw 10.40.40.1
@@ -295,6 +295,14 @@ python3 -m venv .venv
 ```
 
 `tests/test_engine_office.py` runs only when something is already listening on `127.0.0.1:9996`. The lab install does not pull a test runner.
+
+`pytest` also runs the frontend mask and cable checks when `node` is 22.6 or newer. Those scripts need Node's type stripping, which arrived in 22.6. An older Node, or no `node` on `PATH`, skips that one test and prints the command below. Run the same checks by themselves from `frontend/`:
+
+```bash
+cd frontend && npm test
+```
+
+`npm test` runs `node --experimental-strip-types src/mask.test.ts` and `node --experimental-strip-types src/cables.test.ts`.
 
 ## Assistant template
 

@@ -102,6 +102,9 @@ def infer(devices: dict[str, tuple[str, str]]) -> Inference:
             remote_name = canonical_interface(remote_iface)
             if parsed[name].get(local_name) is None:
                 continue
+            # CDP and LLDP pastes do not suggest a cable when either end is a host.
+            if _looks_like_host(devices[name][0]) or _looks_like_host(devices[remote][0]):
+                continue
             add(
                 Suggestion(
                     name,
@@ -249,13 +252,26 @@ def _suggest_host_cables(devices: dict[str, tuple[str, str]], add) -> None:
 
 
 def _looks_like_host(config: str) -> bool:
-    """A host has a default gateway and is not a router or a switch."""
+    """A host has a default gateway and is not a router or a switch.
+
+    Switch commands sit indented under an interface, so a column-0 search
+    misses them. A vlan definition, an SVI, or any switchport line means
+    this device is not a host, even when it also has ``ip default-gateway``.
+    """
     if not re.search(r"(?im)^ip\s+default-gateway\s+\d", config):
         return False
     if re.search(r"(?im)^ip\s+routing\s*$", config):
         return False
-    if re.search(r"(?im)^switchport\s+", config):
-        return False
+    for raw in config.replace("\r\n", "\n").split("\n"):
+        line = raw.strip()
+        if not line or line.startswith("!"):
+            continue
+        if re.match(r"(?i)^(?:no\s+)?switchport\b", line):
+            return False
+        if re.match(r"(?i)^vlan\s+(?:\d+|access-map\b|filter\b)", line):
+            return False
+        if re.match(r"(?i)^interface\s+vlan\d+\b", line):
+            return False
     return True
 
 

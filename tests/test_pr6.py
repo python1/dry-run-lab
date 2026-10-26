@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from dryrun_lab.cli import main
 from dryrun_lab.configedit import apply_config_lines
 from dryrun_lab.engine import _with_local_warnings
 from dryrun_lab.hosts import host_config
-from dryrun_lab.infer import infer
+from dryrun_lab.infer import _looks_like_host, infer
 from dryrun_lab.ioscheck import KEPT_NOTE, invalid_input, kept_note, unmodeled_lines
 from dryrun_lab.l2path import layer2_note
 from dryrun_lab.showfmt import format_ping
@@ -277,6 +278,96 @@ end
     assert "VLAN 10" in pos_link.reason
 
 
+def test_access_switch_with_default_gateway_is_not_a_host() -> None:
+    sw2 = (ROOT / "examples" / "office-lab" / "configs" / "SW2.cfg").read_text(encoding="utf-8")
+    assert "ip default-gateway" in sw2
+    assert "switchport mode access" in sw2
+    assert _looks_like_host(sw2) is False
+    assert _looks_like_host(host_config("POS-01", "10.16.10.41/24", "10.16.10.1")) is True
+
+
+def test_host_cable_on_a_gateway_switch_ignores_cdp() -> None:
+    switch = """
+hostname SW2
+!
+vlan 10
+ name OFFICE
+!
+interface GigabitEthernet0/1
+ description to SW1 Gi1/0/2
+ switchport mode trunk
+!
+interface GigabitEthernet0/10
+ description POS register 1
+ switchport mode access
+ switchport access vlan 10
+!
+interface Vlan10
+ ip address 10.16.10.1 255.255.255.0
+!
+ip default-gateway 10.99.0.1
+!
+end
+"""
+    other = """
+hostname SW1
+!
+interface GigabitEthernet1/0/2
+ switchport mode trunk
+!
+ip default-gateway 10.99.0.1
+!
+end
+"""
+    pos = host_config("POS-01", "10.16.10.41/24", "10.16.10.1")
+    found = infer(
+        {
+            "SW2": (
+                switch,
+                "POS-01 GigabitEthernet0/10 120 H Linux Ethernet0\n"
+                "SW1 GigabitEthernet0/1 120 S I GigabitEthernet1/0/2\n",
+            ),
+            "POS-01": (pos, "SW2 GigabitEthernet0/10 120 S I Ethernet0\n"),
+            "SW1": (other, ""),
+        }
+    )
+    host_links = [item for item in found.links if "POS-01" in {item.a_device, item.b_device}]
+    assert len(host_links) == 1
+    assert host_links[0].source == "host"
+    assert "cdp" not in host_links[0].source
+    trunks = [item for item in found.links if {item.a_device, item.b_device} == {"SW1", "SW2"}]
+    assert trunks
+    assert any("cdp" in item.source for item in trunks)
+
+
+def test_cdp_alone_does_not_suggest_a_host_cable() -> None:
+    switch = """
+hostname SW2
+!
+vlan 10
+!
+interface GigabitEthernet0/10
+ description guest laptop
+ switchport mode access
+ switchport access vlan 10
+!
+interface Vlan10
+ ip address 10.16.10.1 255.255.255.0
+!
+ip default-gateway 10.99.0.1
+!
+end
+"""
+    pos = host_config("POS-01", "10.16.10.41/24", "10.16.10.1")
+    found = infer(
+        {
+            "SW2": (switch, "POS-01 GigabitEthernet0/10 120 H Linux Ethernet0\n"),
+            "POS-01": (pos, ""),
+        }
+    )
+    assert not any("POS-01" in {item.a_device, item.b_device} for item in found.links)
+
+
 def test_device_add_posts_config_and_load_help_documents_a_folder(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -381,7 +472,24 @@ def test_docs_cover_the_customer_pack_and_the_mask() -> None:
     assert "maskSecretsDefault" in app
 
 
+def _node_version() -> tuple[int, int] | None:
+    try:
+        completed = subprocess.run(["node", "--version"], capture_output=True, text=True, check=False)
+    except OSError:
+        return None
+    match = re.match(r"v?(\d+)\.(\d+)", (completed.stdout or "").strip())
+    if completed.returncode != 0 or match is None:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
 def test_frontend_mask_and_cable_labels() -> None:
+    found = _node_version()
+    if found is None or found < (22, 6):
+        pytest.skip(
+            "Frontend mask and cable tests need Node >= 22.6. From frontend/: npm test "
+            "(node --experimental-strip-types src/mask.test.ts and src/cables.test.ts)."
+        )
     for script in ("frontend/src/mask.test.ts", "frontend/src/cables.test.ts"):
         completed = subprocess.run(
             ["node", "--experimental-strip-types", str(ROOT / script)],
