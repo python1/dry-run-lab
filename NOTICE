@@ -28,3 +28,106 @@ Jackson JSON processor (Copyright 2007-, Tatu Saloranta), licensed under
 the Apache License, Version 2.0. That notice ships inside the jar, which
 this repository downloads at runtime from the official batfish/allinone
 image and does not vendor.
+
+Batfish is the analysis engine (`org.batfish.allinone.Main` and the
+matching pybatfish client). `tools/fetch_batfish.py` downloads the jar,
+question templates, and wheel from one pinned image layer. There is no
+copy of the Batfish source in this tree.
+
+Other third-party code
+----------------------
+
+There is no vendor directory, no ATTRIBUTION file, and no copied upstream
+source tree. Fonts on the page are system fonts. `node_modules` is not
+part of this repository. `frontend/package.json` and `pyproject.toml`
+name the dependencies. `frontend/package-lock.json` locks the UI packages.
+
+Bundled into the built page
+---------------------------
+
+The page that ships is `src/dryrun_lab/static/`. The script and stylesheet
+under `src/dryrun_lab/static/assets/` contain the UI libraries below. The
+browser loads those files from the lab process and does not fetch them
+from a network.
+
+xterm.js (`@xterm/xterm` and `@xterm/addon-fit`)
+  Copyright xterm.js contributors
+  MIT License
+  https://github.com/xtermjs/xterm.js
+  `frontend/src/components/DeviceCli.tsx` uses the terminal and the fit
+  addon. Their code and CSS are inside the built assets.
+
+React and React DOM
+  Copyright Meta Platforms, Inc. and affiliates
+  MIT License
+  https://github.com/facebook/react
+  The page is a React application. The library is inside the built script.
+
+Radix UI (`@radix-ui/react-dialog`, `@radix-ui/react-slot`, and the Radix
+runtime packages those two import, as locked in `frontend/package-lock.json`)
+  Copyright WorkOS
+  MIT License
+  https://github.com/radix-ui/primitives
+  Used by the dialogs and the button component. Bundled into the built
+  script.
+
+Lucide (`lucide-react`)
+  ISC License
+  https://github.com/lucide-icons/lucide
+  Icon components used by the page. The icons the page imports are bundled
+  into the built script.
+
+class-variance-authority
+  Apache License, Version 2.0
+  https://github.com/joe-bell/cva
+  Button variants in `frontend/src/components/ui/button.tsx`. Bundled into
+  the built script.
+
+clsx
+  MIT License
+  https://github.com/lukeed/clsx
+  Class-name helper in `frontend/src/lib/utils.ts`. Bundled into the built
+  script.
+
+tailwind-merge
+  MIT License
+  https://github.com/dcastil/tailwind-merge
+  Class-name helper in `frontend/src/lib/utils.ts`. Bundled into the built
+  script.
+
+Tailwind CSS
+  Copyright Tailwind Labs, Inc.
+  MIT License
+  https://github.com/tailwindlabs/tailwindcss
+  Used when the page is built. The generated stylesheet is the CSS file
+  under `src/dryrun_lab/static/assets/`. The Tailwind compiler is not
+  shipped.
+
+Vite
+  MIT License
+  https://github.com/vitejs/vite
+  Used to build the page. The built script includes Vite's small
+  modulepreload helper. The Vite compiler is not required to run the lab.
+
+Installed when the lab is set up, not copied into this tree
+------------------------------------------------------------
+
+FastAPI
+  Copyright Sebastián Ramírez
+  MIT License
+  https://github.com/fastapi/fastapi
+  Declared in `pyproject.toml`. Installed into the virtualenv by
+  `./ensure-running`. Not copied into this repository.
+
+Uvicorn
+  Copyright Encode OSS Ltd
+  BSD 3-Clause License
+  https://github.com/encode/uvicorn
+  Declared in `pyproject.toml`. Installed into the virtualenv by
+  `./ensure-running`. Not copied into this repository.
+
+Build tools recorded in `frontend/package-lock.json` and not shipped in
+the page include TypeScript (Apache-2.0), lightningcss (MPL-2.0),
+caniuse-lite (CC-BY-4.0), and other packages under MIT, ISC,
+BSD-3-Clause, or Apache-2.0. A machine that only runs the lab does not
+need them.
