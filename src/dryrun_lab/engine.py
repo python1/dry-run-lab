@@ -24,11 +24,11 @@ from dryrun_lab.acls import (
 from dryrun_lab.configedit import apply_config_lines, prompt_for
 from dryrun_lab.configparse import canonical_interface, parse_config
 from dryrun_lab.constants import COMPUTED_TAG, ENGINE_HOST, ENGINE_PORT
-from dryrun_lab.facts import annotate_warnings
-from dryrun_lab.hosts import host_document, host_limits
-from dryrun_lab.ioscheck import fold_line, invalid_input, is_harmless, kept_note, unmodeled_lines
+from dryrun_lab.facts import annotate_warnings, routing_enabled
+from dryrun_lab.hosts import gateway_address, host_document, host_limits
+from dryrun_lab.ioscheck import canonical_line, invalid_input, is_harmless, kept_note, unmodeled_lines
 from dryrun_lab.infer import endpoint_key
-from dryrun_lab.l2path import layer2_note
+from dryrun_lab.l2path import layer2_note, unattached_host
 from dryrun_lab.paths import data_home
 from dryrun_lab.probes import Probe, probes_for_acl, probes_for_commands, probes_for_lab
 from dryrun_lab.showfmt import (
@@ -202,7 +202,7 @@ class Engine:
         pieces = command.replace("\r\n", "\n").split("\n")
         pieces = [piece for piece in pieces if piece.strip()] or [command]
         texts: list[str] = []
-        prompt = f"{device.name}#"
+        prompt = f"{_cli_name(device)}#"
         changed = False
         ok = True
         for piece in pieces:
@@ -219,7 +219,7 @@ class Engine:
         key = device.name.lower()
         folded = " ".join(command.strip().split()).lower()
         draft = self._drafts.get(key)
-        enable = f"{device.name}#"
+        enable = f"{_cli_name(device)}#"
         if draft is not None:
             return self._config_line(lab, device, command, draft)
         if folded in _CONFIG_ENTER:
@@ -231,7 +231,7 @@ class Engine:
                 prompt=enable,
                 computed=False,
             )
-            return f"{device.name}(config)#", text, False, True
+            return f"{_cli_name(device)}(config)#", text, False, True
         if folded in {"revert", "rollback"}:
             return enable, self._revert(lab, device, command), True, True
         flow = parse_flow(command)
@@ -248,11 +248,11 @@ class Engine:
         kind = normalize_command(command)
         if kind is None:
             if "|" in command:
-                detail = "% Pipes are not simulated in this version.\n\n" + command_help()
+                detail = "% Pipes are not simulated in this version.\n\n" + command_help(device.role)
             elif command_disposition(command) == "unmodeled":
-                detail = "% Not simulated in this version.\n\n" + command_help()
+                detail = "% Not simulated in this version.\n\n" + command_help(device.role)
             else:
-                detail = "% Invalid input detected at '^' marker.\n\n" + command_help()
+                detail = "% Invalid input detected at '^' marker.\n\n" + command_help(device.role)
             return enable, _wrap(device.name, command, detail), False, False
         if kind == "running-config":
             rows = [row for row in lab.warnings if row.get("device") == device.name]
@@ -275,12 +275,20 @@ class Engine:
         if kind == "interfaces":
             body = show_ip_interface_brief(self._interfaces.get(key, []))
         elif kind == "vlan":
-            body = show_vlan_brief(self._vlans.get(key, []), vlan_names(device.config))
+            body = show_vlan_brief(
+                self._vlans.get(key, []),
+                vlan_names(device.config),
+                self._interfaces.get(key, []),
+            )
         elif kind == "trunk":
-            body = show_interfaces_trunk(self._interfaces.get(key, []))
+            active = _active_vlans(self._vlans.get(key, []))
+            body = show_interfaces_trunk(self._interfaces.get(key, []), active)
         else:
             rows = self._routes.get(key, [])
-            body = with_assumed(show_ip_route(rows), assumed_lines_for_routes(device.name, rows, _assumed_links(lab)))
+            body = with_assumed(
+                show_ip_route(rows, config=device.config, role=device.role),
+                assumed_lines_for_routes(device.name, rows, _assumed_links(lab)),
+            )
         return enable, _wrap(device.name, command, body), False, True
 
     def _client(self) -> Any:
@@ -306,10 +314,10 @@ class Engine:
     def _config_line(self, lab: Lab, device: Any, command: str, draft: list[str]) -> tuple[str, str, bool, bool]:
         key = device.name.lower()
         folded = " ".join(command.strip().split()).lower()
-        enable = f"{device.name}#"
-        current = prompt_for(device.name, draft)
+        enable = f"{_cli_name(device)}#"
+        current = prompt_for(_cli_name(device, draft), draft)
         if "|" in command:
-            detail = "% Pipes are not simulated in this version.\n\n" + command_help()
+            detail = "% Pipes are not simulated in this version.\n\n" + command_help(device.role)
             return current, _wrap(device.name, command, detail, prompt=current), False, False
         if folded == "abort":
             self._drafts.pop(key, None)
@@ -331,6 +339,7 @@ class Engine:
             body = self._apply(lab, device, lines)
             failed = body.startswith("Change was not kept")
             changed = not failed and not body.startswith("No configuration changes")
+            enable = f"{_cli_name(device)}#"
             return enable, _wrap(device.name, command, body, prompt=current, computed=changed), changed, not failed
         if folded in {"revert", "rollback"}:
             return (
@@ -348,7 +357,7 @@ class Engine:
         if folded == "exit":
             draft.append("exit")
             return (
-                prompt_for(device.name, draft),
+                prompt_for(_cli_name(device, draft), draft),
                 _wrap(device.name, command, "", prompt=current, computed=False),
                 False,
                 True,
@@ -361,10 +370,19 @@ class Engine:
                 False,
                 False,
             )
-        note = kept_note(draft, command.strip()) or ""
-        draft.append(fold_line(command.strip()))
+        canon = canonical_line(draft, command.strip())
+        duplicate = _duplicate_sequence(device.config, draft, canon)
+        if duplicate:
+            return (
+                current,
+                _wrap(device.name, command, duplicate, prompt=current, computed=False),
+                False,
+                False,
+            )
+        note = kept_note(draft, canon) or ""
+        draft.append(canon)
         return (
-            prompt_for(device.name, draft),
+            prompt_for(_cli_name(device, draft), draft),
             _wrap(device.name, command, note, prompt=current, computed=False),
             False,
             True,
@@ -497,7 +515,11 @@ class Engine:
         )
 
     def _flow_body(self, lab: Lab, device_name: str, flow: dict[str, str | None]) -> tuple[dict[str, Any], str | None]:
+        missing = _unattached_trace(lab, device_name)
+        if missing is not None:
+            return missing, None
         trace = self._trace(device_name, str(flow["dst"]), flow.get("src"), flow.get("ingress"))
+        trace = _note_unused_gateway(lab, device_name, trace)
         _rename_steps(lab, trace)
         drop = None
         if _denied(trace):
@@ -508,7 +530,17 @@ class Engine:
         return trace, drop
 
     def _reach_summary(self, lab: Lab, probe: Probe) -> str:
+        missing = _unattached_trace(lab, probe.device)
+        if missing is not None:
+            from dryrun_lab.showfmt import explain_disposition
+
+            summary = str(missing.get("disposition") or "NOT_ATTACHED")
+            sentence = explain_disposition(missing, None, probe.dst)
+            if sentence:
+                summary = f"{summary} — {sentence}"
+            return summary
         trace = self._trace(probe.device, probe.dst, probe.src, probe.ingress)
+        trace = _note_unused_gateway(lab, probe.device, trace)
         _rename_steps(lab, trace)
         bucket = self._reach_assumed.setdefault(probe.label(), [])
         for line in assumed_lines_for_trace(trace, _assumed_links(lab)):
@@ -710,7 +742,7 @@ class Engine:
                 )
                 wrote_host = True
                 continue
-            (configs / f"{safe}.cfg").write_text(numbered_config(device.config), encoding="utf-8")
+            (configs / f"{safe}.cfg").write_text(_snapshot_text(device), encoding="utf-8")
         if not wrote_host and hosts.exists():
             shutil.rmtree(hosts)
         edges = [_edge(link) for link in _layer1_links(lab)]
@@ -721,6 +753,111 @@ class Engine:
             encoding="utf-8",
         )
         return root
+
+
+def _cli_name(device: Any, draft: list[str] | None = None) -> str:
+    """Prompt hostname. The lab device name stays the engine identity."""
+    name = str(device.name)
+    texts = list(str(device.config).splitlines())
+    if draft:
+        texts.extend(draft)
+    for raw in texts:
+        match = re.match(r"(?i)^hostname\s+(\S+)", raw.strip())
+        if match:
+            name = match.group(1)
+    return name
+
+
+def _duplicate_sequence(config: str, draft: list[str], line: str) -> str | None:
+    """IOS rejects a sequence that is already in the ACL being edited."""
+    match = re.match(r"(?i)^(\d+)\s+(?:permit|deny|remark)\b", " ".join(line.split()))
+    if match is None:
+        return None
+    name: str | None = None
+    for raw in draft:
+        low = " ".join(raw.strip().split()).lower()
+        header = re.match(r"ip access-list (?:extended|standard) (\S+)", low)
+        if header and not low.startswith("ip access-list resequence"):
+            name = header.group(1)
+            continue
+        if low.startswith(("interface ", "router ")) or re.fullmatch(r"vlan \d+", low) or low == "exit":
+            name = None
+    if name is None:
+        return None
+    preview = apply_config_lines(config, draft)
+    number = int(match.group(1))
+    for acl in parse_acls(preview):
+        if acl.name.lower() == name and any(ace.seq == number for ace in acl.aces):
+            return "% Duplicate sequence number\n"
+    return None
+
+
+def _unattached_trace(lab: Lab, device_name: str) -> dict[str, Any] | None:
+    reason = unattached_host(lab, device_name)
+    if reason is None:
+        return None
+    return {
+        "ok": False,
+        "disposition": "NOT_ATTACHED",
+        "steps": [],
+        "error": None,
+        "attached": reason,
+    }
+
+
+def _note_unused_gateway(lab: Lab, device_name: str, trace: dict[str, Any]) -> dict[str, Any]:
+    if str(trace.get("disposition") or "").upper() != "NO_ROUTE":
+        return trace
+    device = lab.device(device_name)
+    if device is None or device.role != "switch" or routing_enabled(device.config):
+        return trace
+    gateway = gateway_address(device.config)
+    if not gateway:
+        return trace
+    noted = dict(trace)
+    noted["gateway"] = gateway
+    return noted
+
+
+def _snapshot_text(device: Any) -> str:
+    """Config handed to the engine.
+
+    The hostname in that file is the lab device name, so a `hostname` edit
+    changes the prompt and the displayed config without renaming the node.
+    A layer-2 switch with `ip default-gateway` gets a snapshot default route
+    so traffic that starts on the switch follows the gateway. The displayed
+    config is unchanged.
+    """
+    text = numbered_config(device.config)
+    lines = text.replace("\r\n", "\n").split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    rewritten: list[str] = []
+    saw = False
+    for raw in lines:
+        if re.match(r"(?i)^hostname\s+\S+\s*$", raw.strip()):
+            if not saw:
+                rewritten.append(f"hostname {device.name}")
+                saw = True
+            continue
+        rewritten.append(raw)
+    if not saw:
+        rewritten.insert(0, f"hostname {device.name}")
+    if device.role == "switch" and not routing_enabled(device.config):
+        gateway = gateway_address(device.config)
+        route = f"ip route 0.0.0.0 0.0.0.0 {gateway}" if gateway else ""
+        if route and not any(line.strip().lower() == route.lower() for line in rewritten):
+            _insert_snapshot_route(rewritten, route)
+    body = "\n".join(rewritten).rstrip() + "\n"
+    return body
+
+
+def _insert_snapshot_route(lines: list[str], route: str) -> None:
+    for index, line in enumerate(lines):
+        if line.strip().lower() == "end":
+            lines.insert(index, route)
+            return
+    lines.append(route)
 
 
 def _wrap(
@@ -957,7 +1094,21 @@ def _attach_devices(rows: list[dict[str, Any]], lab: Lab) -> list[dict[str, Any]
         attached.append({**row, "device": device})
     configs = {device.name: device.config for device in lab.devices}
     attached = _with_local_warnings(attached, configs)
+    attached = _drop_snapshot_routes(attached, configs)
     return annotate_warnings(attached, configs)
+
+
+def _drop_snapshot_routes(rows: list[dict[str, Any]], configs: dict[str, str]) -> list[dict[str, Any]]:
+    """Hide a default route that exists only in the analysis snapshot."""
+    kept: list[dict[str, Any]] = []
+    for row in rows:
+        text = str(row.get("text") or "").strip().lower()
+        device = str(row.get("device") or "")
+        config = configs.get(device, "").lower()
+        if text.startswith("ip route 0.0.0.0 0.0.0.0") and text not in config:
+            continue
+        kept.append(row)
+    return kept
 
 
 def _with_local_warnings(rows: list[dict[str, Any]], configs: dict[str, str]) -> list[dict[str, Any]]:
@@ -1026,6 +1177,18 @@ def _interfaces(session: Any) -> dict[str, list[dict[str, Any]]]:
             }
         )
     return grouped
+
+
+def _active_vlans(rows: list[dict[str, Any]]) -> set[int]:
+    found: set[int] = set()
+    for row in rows:
+        try:
+            vlan = int(row.get("vlan"))
+        except (TypeError, ValueError):
+            continue
+        if 1 <= vlan <= 4094:
+            found.add(vlan)
+    return found
 
 
 def _vlans(session: Any) -> dict[str, list[dict[str, Any]]]:

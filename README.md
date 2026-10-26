@@ -98,6 +98,20 @@ Open that URL on the same machine. The server listens on `127.0.0.1` only. The p
 
 Run `./ensure-running` again after a computer restart, and after an Update Bot's Computer wipe. If the engine is already up and a saved lab has not been computed in this process, the script reloads that lab and recomputes. You do not have to load the lab by hand before show commands work.
 
+`bin/start-dryrun-lab` runs that same starter from any directory. It does not need `DRYRUN_HOME`. After `./ensure-running` has recorded this checkout, the same command is on your `PATH` as `start-dryrun-lab`, in a login shell and in an ordinary terminal. A **Start Dry Run Lab** icon is in the application menu. This computer has no session manager, so a login autostart entry does not start the lab. The command and the icon are the recovery that works here.
+
+### The page will not load
+
+The page is served at `http://127.0.0.1:8742` on this computer.
+
+When the server is down, the window stays empty:
+
+1. Run `start-dryrun-lab` from any directory, or double-click **Start Dry Run Lab**.
+2. Open `http://127.0.0.1:8742` again. A reload after the server is up shows the devices, the topology, and the terminal.
+3. If the icon is missing, run `./ensure-running` once from the repository directory. That records the checkout and installs the command and the icon.
+
+When the server is up and the window stays empty, the browser is showing a saved copy of the page script. Press Ctrl+Shift+R to reload. If the script still does not mount, the page says `The page didn't load. Press Ctrl+Shift+R to reload.`
+
 `DRYRUN_HOME` overrides the data directory for that command. `./ensure-running` records the directory it actually used in `.dryrun-home` in the checkout and in `$XDG_CONFIG_HOME/dryrun-lab/install-path` (`~/.config/dryrun-lab/install-path` when `XDG_CONFIG_HOME` is unset). Later shells do not need `DRYRUN_HOME`. `bin/dryrun-lab` reads the override, then the checkout record, then the user record, then `$HOME/.local/share/dryrun-lab`.
 
 A virtualenv under that directory is reused when it matches the pinned requirements and the same Python interpreter. Those runs do not contact the package index. If that Python is missing or has changed, the virtualenv is created again. A home-folder virtualenv can survive a wipe while the interpreter it points at does not.
@@ -211,7 +225,7 @@ SRV20 uses the existing VLAN 20 access port on SW3 Gi0/10. VLAN 40 has to be all
 
 One router (router-on-a-stick, OSPF on a `/30`, one extended ACL) and three switches (VLANs, trunks, access ports). Load it from the UI with **Load office lab**, or with the CLI command above. Dashed cables are suggestions. Confirm or dismiss each one. Shared management subnets are notes, not cables.
 
-Each example device contains `ip default-gateway`. The lab reads that device's config: if `ip routing` is enabled, the line is **ignored when ip routing is enabled** (R1 and SW1). If it is not, the line stays in the **not simulated** list (SW2 and SW3). The hostname is not special-cased.
+Each example device contains `ip default-gateway`. The lab reads that device's config: if `ip routing` is enabled, the line is **ignored when ip routing is enabled** (R1 and SW1). On a switch with `ip routing` off (SW2 and SW3), the gateway is used for traffic that starts on the switch, and `show ip route` prints `Default gateway is 10.99.0.1`. Typing `hostname` replaces that line and the prompt. The device keeps its name in the lab, so its routes stay with that device.
 
 Lines that can change forwarding, and that this lab does not apply, are listed as **not simulated**. That group is `spanning-tree` (including `spanning-tree mode rapid-pvst` and `spanning-tree portfast`), `storm-control`, `switchport port-security`, `switchport block`, `ip dhcp snooping`, `ip arp inspection`, `ip verify unicast`, `channel-group`, `udld`, `mac access-group`, `policy-map`, `class-map`, `service-policy`, `mls qos`, and `vtp mode`. The office access ports include `spanning-tree portfast`, so those lines show up on SW2 and SW3. Each copy is its own warning. SW2 has the line on Gi0/10, Gi0/11, and Gi0/20, and each of those lines is flagged. The warning file is `configs/SW2.cfg`, the same path as the other warnings for that device. The same text on another interface or another device is not folded into the first one.
 

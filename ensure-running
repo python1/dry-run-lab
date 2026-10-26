@@ -74,6 +74,9 @@ export DRYRUN_HOME="$(dryrun_resolve_home "$ROOT")"
 DATA="$DRYRUN_HOME"
 mkdir -p "$DATA"
 dryrun_record_home "$ROOT" "$DATA"
+# shellcheck source=bin/install-launchers
+source "$ROOT/bin/install-launchers"
+dryrun_install_launchers "$ROOT"
 LOG="$DATA/ensure.log"
 touch "$LOG"
 

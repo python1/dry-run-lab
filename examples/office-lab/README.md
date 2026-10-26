@@ -36,6 +36,6 @@ VLAN 99 (`10.99.0.0/24`) is a shared management subnet, not a cable. The lab mus
 Each device has `ip default-gateway`. The lab checks that device's own config, not the hostname.
 
 - R1 and SW1 contain `ip routing`. On those devices the line is reported as **ignored when ip routing is enabled**.
-- SW2 and SW3 do not contain `ip routing`. Those lines stay in the **not simulated** list. The engine's detail remains that the feature is not currently supported.
+- SW2 and SW3 do not contain `ip routing`. Traffic that starts on those switches uses `ip default-gateway`, and `show ip route` prints `Default gateway is 10.99.0.1`.
 
-`no ip routing` after `ip routing` would put the device back in the not-simulated list. Other lines in these files are parsed.
+`no ip routing` after `ip routing` makes the gateway apply to traffic that starts on the switch. Other lines in these files are parsed.

@@ -48,6 +48,8 @@ Run it again after a computer restart. Run it again after an Update Bot's Comput
 
 The command is idempotent. It does not use systemd. When the analysis engine is up and a lab is saved, it reloads that lab and recomputes if this process has not computed it yet.
 
+`bin/start-dryrun-lab` runs that starter from any directory and does not need `DRYRUN_HOME`. After one `./ensure-running`, it is on `PATH` for ordinary terminals, and the **Start Dry Run Lab** icon calls it. This computer has no session manager, so login autostart does not start the lab. If the page at `http://127.0.0.1:8742` stays empty, run `start-dryrun-lab` and open that URL again. If the server is already up, press Ctrl+Shift+R so the browser drops a cached page script.
+
 It does not open a browser unless you pass `--open`. Do not pass `--open` unless someone asked to see the page. The browser path reuses an existing Dry Run Lab window, or starts one with a dedicated profile and first-run checks disabled. It never accepts terms or clicks a dialog.
 
 `DRYRUN_HOME` overrides the data directory for that command. `./ensure-running` records the directory it used in `.dryrun-home` in the checkout and in `~/.config/dryrun-lab/install-path` (or under `$XDG_CONFIG_HOME`). Later commands find that install without `DRYRUN_HOME`. If nothing was recorded, the directory is `$HOME/.local/share/dryrun-lab`.

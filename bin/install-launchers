@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Record this checkout and install the Start Dry Run Lab command, icon, and login entry.
+set -euo pipefail
+
+dryrun_install_launchers() {
+  local root="$1"
+  local config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+  local config="${config_home}/dryrun-lab"
+  local desktop
+  mkdir -p "$config" "$HOME/.local/bin" "$HOME/.local/share/applications" "${config_home}/autostart"
+  printf '%s\n' "$root" >"$config/repo-path"
+  cp "$root/bin/start-dryrun-lab" "$HOME/.local/bin/start-dryrun-lab"
+  chmod +x "$HOME/.local/bin/start-dryrun-lab" "$root/bin/start-dryrun-lab"
+  desktop="$(mktemp)"
+  sed "s|@ROOT@|$root|g" "$root/bin/start-dryrun-lab.desktop" >"$desktop"
+  cp "$desktop" "$HOME/.local/share/applications/start-dryrun-lab.desktop"
+  cp "$desktop" "${config_home}/autostart/start-dryrun-lab.desktop"
+  rm -f "$desktop"
+  dryrun_path_for_shells
+}
+
+# Login shells already see ~/.local/bin from the usual profile. An ordinary
+# terminal is not a login shell, so it only reads ~/.bashrc.
+dryrun_path_for_shells() {
+  local bashrc="$HOME/.bashrc"
+  local marker="# dryrun-lab path"
+  if [[ -f "$bashrc" ]] && grep -q "$marker" "$bashrc"; then
+    return 0
+  fi
+  touch "$bashrc"
+  cat >>"$bashrc" <<'EOF'
+
+# dryrun-lab path
+case ":${PATH}:" in
+  *":${HOME}/.local/bin:"*) ;;
+  *) PATH="${HOME}/.local/bin:${PATH}" ;;
+esac
+EOF
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  root="$(cd "$(dirname "$0")/.." && pwd)"
+  dryrun_install_launchers "$root"
+fi
