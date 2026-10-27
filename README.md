@@ -131,7 +131,7 @@ From a clean Debian or Ubuntu box, with `sudo` and outbound HTTPS:
 ./ensure-running
 ```
 
-**Tested on Debian 13 (Grok Bot) and Windows via WSL2 (Ubuntu 24.04).**
+**Tested on Debian 13 (Grok Bot), Windows via WSL2 (Ubuntu 24.04), and macOS (Apple Silicon, Homebrew).**
 
 Windows 11 via WSL2:
 

@@ -364,20 +364,22 @@ def test_help_mentions_homebrew_and_keeps_docker_untested() -> None:
     assert "tested on macOS" not in completed.stdout.lower()
 
 
-def test_readme_and_changelog_describe_macos_without_a_tested_claim() -> None:
+def test_readme_and_changelog_mark_macos_apple_silicon_tested() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    tested = (
+        "Tested on Debian 13 (Grok Bot), Windows via WSL2 (Ubuntu 24.04), "
+        "and macOS (Apple Silicon, Homebrew)."
+    )
     assert "brew install openjdk@21" in readme
     assert "https://brew.sh" in readme
     assert "Clone into a normal folder" in readme
     assert "./ensure-running" in readme
     assert "http://127.0.0.1:8742" in readme
-    assert "tested on macos" not in readme.lower()
-    assert "Tested on Debian 13 (Grok Bot) and Windows via WSL2 (Ubuntu 24.04)." in readme
+    assert tested in readme
     assert "## Unreleased" in changelog
     assert "keg-only" in changelog
-    assert "tested on macos" not in changelog.lower()
-    assert "Tested on Debian 13 (Grok Bot) and Windows via WSL2 (Ubuntu 24.04)." in changelog
+    assert tested in changelog
 
 
 def test_darwin_launchers_edit_zshrc_and_skip_desktop(tmp_path: Path) -> None:
