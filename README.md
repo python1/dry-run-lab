@@ -129,6 +129,14 @@ From a clean Debian or Ubuntu box, with `sudo` and outbound HTTPS:
 ./ensure-running
 ```
 
+**Tested on Debian 13 (Grok Bot) and Windows via WSL2 (Ubuntu 24.04).**
+
+Windows 11 via WSL2:
+
+- Install Ubuntu 24.04 in WSL.
+- Clone into the WSL home folder for speed, not a Windows or NTFS path.
+- Open the printed URL (`http://127.0.0.1:8742`) in the Windows browser.
+
 The script is idempotent. It installs a JDK 21 if `java` is missing or older, downloads the official Batfish all-in-one jar, creates a virtualenv, and starts the lab in the background. It does not use systemd. When it finishes it prints:
 
 ```text
