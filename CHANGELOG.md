@@ -6,4 +6,4 @@
 
 ## v0.1.1
 
-- **Tested on Debian 13 (Grok Bot) and Windows via WSL2 (Ubuntu 24.04).**
+- **Tested on Debian 13 (Grok Bot), Windows via WSL2 (Ubuntu 24.04), and macOS (Apple Silicon, Homebrew).**
