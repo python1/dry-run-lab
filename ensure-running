@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Idempotent starter. Safe to re-run. No systemd. Loopback only.
+# macOS /bin/bash is 3.2. Do not use bash 4+ syntax (local arr=(), mapfile, ${var,,}).
 set -euo pipefail
 
 OPEN=0
@@ -28,9 +29,15 @@ When a lab is saved and nothing has been computed yet, reload that
 lab and recompute once the analysis engine is up. Safe to run again.
 No systemd.
 
-Uses sudo and apt to install OpenJDK 21 (openjdk-21-jre-headless)
-system-wide when java is missing or older than 21. Also installs
-curl, python3-venv, and ca-certificates when those are missing.
+On Debian and Ubuntu, uses sudo and apt to install OpenJDK 21
+(openjdk-21-jre-headless) system-wide when java is missing or older
+than 21. Also installs curl, python3-venv, and ca-certificates when
+those are missing.
+On macOS, uses Homebrew to install openjdk@21 and python when they
+are missing. It does not use apt or sudo. A keg-only openjdk@21 is
+used even when java is not on PATH. Desktop icon, login autostart,
+and ~/.bashrc edits are skipped. When the login shell is zsh,
+~/.local/bin is added in ~/.zshrc; otherwise the PATH line is printed.
 Downloads the Batfish jar, question templates, and the matching
 client wheel, then creates a virtualenv. The default engine is Java.
 If Java does not open port 9996, this script stops and points at the
@@ -181,8 +188,198 @@ reap_pid() {
   fi
 }
 
+# darwin-host:begin
+is_darwin() {
+  [[ "$(uname -s)" == "Darwin" ]]
+}
+
+find_brew() {
+  local candidate
+  if command -v brew >/dev/null 2>&1; then
+    command -v brew
+    return 0
+  fi
+  for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+java_version_of() {
+  local bin="$1"
+  [[ -n "$bin" && -x "$bin" ]] || return 1
+  "$bin" -version 2>&1 | sed -n 's/.* version "\([0-9][0-9]*\).*/\1/p' | head -n 1
+}
+
+java_is_21() {
+  local major
+  major="$(java_version_of "$1" || true)"
+  [[ -n "$major" && "$major" -ge 21 ]]
+}
+
+consider_java_prefix() {
+  local prefix="$1"
+  local candidate
+  [[ -n "$prefix" ]] || return 1
+  for candidate in \
+    "$prefix/bin/java" \
+    "$prefix/libexec/openjdk.jdk/Contents/Home/bin/java"
+  do
+    if [[ -x "$candidate" ]] && java_is_21 "$candidate"; then
+      JAVA_BIN="$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+consider_java_root() {
+  local root="$1"
+  local candidate version_dir
+  [[ -n "$root" ]] || return 1
+  for candidate in \
+    "$root/opt/openjdk@21/bin/java" \
+    "$root/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin/java"
+  do
+    if [[ -x "$candidate" ]] && java_is_21 "$candidate"; then
+      JAVA_BIN="$candidate"
+      return 0
+    fi
+  done
+  for version_dir in "$root"/Cellar/openjdk@21/*; do
+    [[ -d "$version_dir" ]] || continue
+    for candidate in \
+      "$version_dir/bin/java" \
+      "$version_dir/libexec/openjdk.jdk/Contents/Home/bin/java"
+    do
+      if [[ -x "$candidate" ]] && java_is_21 "$candidate"; then
+        JAVA_BIN="$candidate"
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
+find_java21() {
+  local bin prefix root
+  if command -v java >/dev/null 2>&1; then
+    bin="$(command -v java)"
+    if [[ -x "$bin" ]] && java_is_21 "$bin"; then
+      JAVA_BIN="$bin"
+      return 0
+    fi
+  fi
+  if [[ -n "${JAVA_HOME:-}" ]] && consider_java_prefix "${JAVA_HOME}"; then
+    return 0
+  fi
+  if [[ -n "${BREW:-}" ]]; then
+    prefix="$("${BREW}" --prefix openjdk@21 2>/dev/null || true)"
+    if consider_java_prefix "$prefix"; then
+      return 0
+    fi
+    root="$("${BREW}" --prefix 2>/dev/null || true)"
+    if consider_java_root "$root"; then
+      return 0
+    fi
+  fi
+  for root in /opt/homebrew /usr/local; do
+    if consider_java_root "$root"; then
+      return 0
+    fi
+  done
+  if [[ -x /usr/libexec/java_home ]]; then
+    prefix="$(/usr/libexec/java_home -v 21 2>/dev/null || true)"
+    if consider_java_prefix "$prefix"; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+python3_ok() {
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 -c "import ensurepip" >/dev/null 2>&1
+}
+
+darwin_prepend_brew_bin() {
+  local found prefix
+  found="$(find_brew || true)"
+  [[ -n "$found" ]] || return 0
+  BREW="$found"
+  prefix="$("${BREW}" --prefix 2>/dev/null || true)"
+  [[ -n "$prefix" && -d "${prefix}/bin" ]] || return 0
+  case ":${PATH}:" in
+    *":${prefix}/bin:"*) ;;
+    *) export PATH="${prefix}/bin:${PATH}" ;;
+  esac
+  hash -r
+}
+
+darwin_brew_install() {
+  local pkg
+  if [[ -z "${BREW:-}" ]]; then
+    BREW="$(find_brew || true)"
+  fi
+  if [[ -z "${BREW:-}" ]]; then
+    say "Homebrew is not installed. Install it from https://brew.sh, then run ./ensure-running again."
+    say "On macOS this script uses Homebrew for OpenJDK 21 and Python. It does not use apt or sudo."
+    return 1
+  fi
+  for pkg in "$@"; do
+    log "brew install ${pkg}"
+    say "Installing ${pkg} with Homebrew…"
+    if ! "${BREW}" install "${pkg}" >>"$LOG" 2>&1; then
+      say "brew install ${pkg} failed. See $LOG"
+      return 1
+    fi
+  done
+  darwin_prepend_brew_bin
+}
+
+install_packages_darwin() {
+  local java_dir
+  darwin_prepend_brew_bin
+  if ! command -v curl >/dev/null 2>&1; then
+    darwin_brew_install curl || return 1
+  fi
+  if ! python3_ok; then
+    darwin_brew_install python || return 1
+    if ! python3_ok; then
+      say "python3 still cannot create a virtualenv after brew install python. See $LOG"
+      return 1
+    fi
+  fi
+  if ! find_java21; then
+    darwin_brew_install openjdk@21 || return 1
+    if ! find_java21; then
+      say "OpenJDK 21 was not found after brew install openjdk@21."
+      say "A keg-only install is fine. Expected java under Homebrew's openjdk@21 prefix."
+      return 1
+    fi
+  fi
+  if [[ "${JAVA_BIN}" == */* ]]; then
+    java_dir="$(dirname "${JAVA_BIN}")"
+    case ":${PATH}:" in
+      *":${java_dir}:"*) ;;
+      *) PATH="${java_dir}:${PATH}" ;;
+    esac
+    export PATH
+    hash -r
+  fi
+  log "using java ${JAVA_BIN}"
+}
+
 install_packages() {
-  local need=()
+  if is_darwin; then
+    install_packages_darwin
+    return
+  fi
+  local need
+  need=()
   command -v curl >/dev/null 2>&1 || need+=(curl)
   if ! command -v java >/dev/null 2>&1; then
     need+=(openjdk-21-jre-headless)
@@ -196,19 +393,26 @@ install_packages() {
   python3 -c "import ensurepip" >/dev/null 2>&1 || need+=(python3-venv)
   [[ -f /etc/ssl/certs/ca-certificates.crt ]] || need+=(ca-certificates)
   if [[ ${#need[@]} -eq 0 ]]; then
+    JAVA_BIN="$(command -v java || true)"
     return 0
   fi
   log "apt install ${need[*]}"
   apt_logged as_root apt-get update -qq
   apt_logged as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${need[@]}" ca-certificates
+  hash -r
+  JAVA_BIN="$(command -v java || true)"
 }
+# darwin-host:end
 
 write_runner() {
+  local java_bin quoted
+  java_bin="${JAVA_BIN:-java}"
+  quoted="$(printf '%q' "$java_bin")"
   cat >"$DATA/batfish/run.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$DATA/batfish"
-exec java -Xms256m -Xmx2g \\
+exec ${quoted} -Xms256m -Xmx2g \\
   -Dlog4j.configurationFile="$DATA/batfish/log4j2.yaml" \\
   -cp "$DATA/batfish/allinone-bundle.jar" \\
   org.batfish.allinone.Main \\
@@ -238,14 +442,34 @@ start_java() {
   return 1
 }
 
+docker_cli() {
+  if is_darwin; then
+    docker "$@"
+  else
+    as_root docker "$@"
+  fi
+}
+
 start_docker() {
   local image="batfish/allinone:v2026.08.27"
   log "starting docker engine ${image} because --engine docker was set; this path is untested"
   if ! command -v docker >/dev/null 2>&1; then
+    if is_darwin; then
+      log "docker is not installed; not using apt on macOS"
+      say "Docker is not on PATH. On macOS, install Docker Desktop and re-run with --engine docker."
+      say "The default engine is Java."
+      return 1
+    fi
     apt_logged as_root apt-get update -qq
     apt_logged as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io
   fi
-  if ! as_root docker info >>"$LOG" 2>&1; then
+  if ! docker_cli info >>"$LOG" 2>&1; then
+    if is_darwin; then
+      log "docker info failed on macOS"
+      say "Docker did not respond. Start Docker Desktop and re-run with --engine docker."
+      say "The default engine is Java."
+      return 1
+    fi
     nohup as_root dockerd --host=unix:///var/run/docker.sock --iptables=false >>"$DATA/dockerd.log" 2>&1 &
     local i
     for ((i = 0; i < 40; i++)); do
@@ -253,8 +477,8 @@ start_docker() {
       sleep 1
     done
   fi
-  as_root docker rm -f dryrun-batfish >>"$LOG" 2>&1 || true
-  as_root docker run -d --name dryrun-batfish --network host --memory 3g \
+  docker_cli rm -f dryrun-batfish >>"$LOG" 2>&1 || true
+  docker_cli run -d --name dryrun-batfish --network host --memory 3g \
     --entrypoint java "$image" \
     -Xms256m -Xmx2g \
     -Dlog4j.configurationFile=log4j2.yaml \
@@ -288,7 +512,14 @@ start_engine() {
 }
 
 python_home() {
-  dirname "$(readlink -f "$(command -v python3)")"
+  local bin resolved
+  bin="$(command -v python3)"
+  # GNU readlink -f. macOS readlink rejects -f; match the home venv records.
+  if resolved="$(readlink -f "$bin" 2>/dev/null)"; then
+    dirname "$resolved"
+    return 0
+  fi
+  python3 -c 'import os, sys; exe = getattr(sys, "_base_executable", "") or sys.executable; print(os.path.dirname(os.path.abspath(exe)))'
 }
 
 venv_matches_python() {
@@ -333,7 +564,8 @@ install_python() {
     rm -f "$DATA/venv.stamp"
   fi
   shopt -s nullglob
-  local wheels=("$DATA"/batfish/pybatfish-*.whl)
+  local wheels
+  wheels=("$DATA"/batfish/pybatfish-*.whl)
   shopt -u nullglob
   if [[ ${#wheels[@]} -eq 0 ]]; then
     log "matching client wheel was not extracted next to the jar"
