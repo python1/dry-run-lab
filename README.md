@@ -108,12 +108,14 @@ A GitHub source archive is produced by `git archive`, which stamps the commit in
 
 ## Run it
 
-`./ensure-running` uses `sudo` and `apt` to install packages system-wide when they are missing:
+On Debian and Ubuntu, `./ensure-running` uses `sudo` and `apt` to install packages system-wide when they are missing:
 
 - OpenJDK 21 (`openjdk-21-jre-headless`), if `java` is missing or older than 21
 - `curl`, if it is missing
 - `python3-venv`, if `ensurepip` is missing
 - `ca-certificates`, if the system bundle is missing
+
+That package list is Debian and Ubuntu. On macOS, `./ensure-running` uses Homebrew instead and does not run `apt` or `sudo`.
 
 It then downloads the Batfish jar, question templates, and the matching pybatfish wheel from one pinned Docker Hub image layer, creates a virtualenv, and installs those into it. The analysis engine is Java. If Java does not open port 9996, the script stops, prints the reason, and points at the log. It does not install or start Docker. Nothing is uploaded. It does not use systemd.
 
@@ -137,7 +139,17 @@ Windows 11 via WSL2:
 - Clone into the WSL home folder for speed, not a Windows or NTFS path.
 - Open the printed URL (`http://127.0.0.1:8742`) in the Windows browser.
 
-The script is idempotent. It installs a JDK 21 if `java` is missing or older, downloads the official Batfish all-in-one jar, creates a virtualenv, and starts the lab in the background. It does not use systemd. When it finishes it prints:
+macOS:
+
+- Install Homebrew from https://brew.sh if `brew` is not already installed.
+- Install Java 21 with `brew install openjdk@21`. If `python3` is missing or cannot create a virtualenv, install it with `brew install python`.
+- Clone into a normal folder, such as your home directory.
+- From the repository directory, run `./ensure-running`. It uses Homebrew and does not use `apt` or `sudo`. It finds `openjdk@21` when that formula is keg-only and `java` is not on `PATH` (Homebrew prefixes are `/opt/homebrew` on Apple Silicon and `/usr/local` on Intel).
+- Open the printed URL (`http://127.0.0.1:8742`).
+
+On macOS the script does not install a desktop icon or a login autostart entry. When the login shell is zsh, it adds `~/.local/bin` in `~/.zshrc` so a new terminal can run `start-dryrun-lab`. Otherwise it prints the `PATH` line to add yourself.
+
+The script is idempotent. On Debian and Ubuntu it installs a JDK 21 with apt if `java` is missing or older. On macOS it uses Homebrew `openjdk@21` when the `java` on `PATH` is missing or older than 21. It downloads the official Batfish all-in-one jar, creates a virtualenv, and starts the lab in the background. It does not use systemd. When it finishes it prints:
 
 ```text
 http://127.0.0.1:8742

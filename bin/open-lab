@@ -7,14 +7,24 @@ URL="${1:-http://127.0.0.1:8742}"
 DATA="${DRYRUN_HOME:-$HOME/.local/share/dryrun-lab}"
 PROFILE="$DATA/browser-profile"
 
-if [[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+launch() {
+  nohup "$@" >/dev/null 2>&1 &
+}
+
+# macOS has no DISPLAY. `open` hands the URL to the default browser.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  if command -v open >/dev/null 2>&1; then
+    launch open "$URL"
+    exit 0
+  fi
   printf '%s\n' "$URL"
   exit 0
 fi
 
-launch() {
-  nohup "$@" >/dev/null 2>&1 &
-}
+if [[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+  printf '%s\n' "$URL"
+  exit 0
+fi
 
 # A browser that is already running can ignore --start-maximized.
 # Ask the window manager once the lab window exists.

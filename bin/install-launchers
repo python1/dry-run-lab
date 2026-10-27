@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Record this checkout and install the Start Dry Run Lab command, icon, and login entry.
+# Record this checkout and install the Start Dry Run Lab command.
+# Linux also installs the icon and login entry. macOS skips both.
 set -euo pipefail
 
 dryrun_install_launchers() {
@@ -7,16 +8,54 @@ dryrun_install_launchers() {
   local config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
   local config="${config_home}/dryrun-lab"
   local desktop
-  mkdir -p "$config" "$HOME/.local/bin" "$HOME/.local/share/applications" "${config_home}/autostart"
+  mkdir -p "$config" "$HOME/.local/bin"
   printf '%s\n' "$root" >"$config/repo-path"
   cp "$root/bin/start-dryrun-lab" "$HOME/.local/bin/start-dryrun-lab"
   chmod +x "$HOME/.local/bin/start-dryrun-lab" "$root/bin/start-dryrun-lab"
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    dryrun_path_for_darwin
+    return 0
+  fi
+  mkdir -p "$HOME/.local/share/applications" "${config_home}/autostart"
   desktop="$(mktemp)"
   sed "s|@ROOT@|$root|g" "$root/bin/start-dryrun-lab.desktop" >"$desktop"
   cp "$desktop" "$HOME/.local/share/applications/start-dryrun-lab.desktop"
   cp "$desktop" "${config_home}/autostart/start-dryrun-lab.desktop"
   rm -f "$desktop"
   dryrun_path_for_shells
+}
+
+# macOS has no desktop icon or login autostart. zsh is the usual login
+# shell; other shells get the PATH line printed instead of a bashrc edit.
+dryrun_path_for_darwin() {
+  local shell_name zshrc marker
+  shell_name="${SHELL:-}"
+  case "$shell_name" in
+    */zsh)
+      zshrc="$HOME/.zshrc"
+      marker="# dryrun-lab path"
+      if [[ -f "$zshrc" ]] && grep -q "$marker" "$zshrc"; then
+        return 0
+      fi
+      touch "$zshrc"
+      cat >>"$zshrc" <<'EOF'
+
+# dryrun-lab path
+case ":${PATH}:" in
+  *":${HOME}/.local/bin:"*) ;;
+  *) PATH="${HOME}/.local/bin:${PATH}" ;;
+esac
+EOF
+      printf '%s\n' "Added ~/.local/bin to PATH in ~/.zshrc. Open a new terminal for start-dryrun-lab."
+      return 0
+      ;;
+  esac
+  case ":${PATH}:" in
+    *":${HOME}/.local/bin:"*) return 0 ;;
+  esac
+  printf '%s\n' "start-dryrun-lab is in ~/.local/bin, which is not on PATH."
+  printf '%s\n' "Add this to your shell startup file (~/.zshrc if you use zsh):"
+  printf '%s\n' '  export PATH="$HOME/.local/bin:$PATH"'
 }
 
 # Login shells already see ~/.local/bin from the usual profile. An ordinary
