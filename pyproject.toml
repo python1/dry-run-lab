@@ -5,7 +5,7 @@ description = "Local dry-run lab for vendor-style network configs"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Paul Charydczak" }]
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 dependencies = [
   "fastapi>=0.115",
   "uvicorn>=0.32",

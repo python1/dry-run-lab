@@ -1,12 +1,14 @@
 # Dry Run Lab
 
 Created by Paul Charydczak.
+Source: https://github.com/python1/dry-run-lab
+License: [AGPL-3.0](LICENSE)
 
 **Status: beta.** Dry Run Lab is a local simulator for a small vendor-style network. You draw routers and switches, paste a config on each device, and confirm the cables the lab inferred. Show commands are computed on this machine by [Batfish](https://github.com/batfish/batfish). Nothing is uploaded, and the lab never opens a session to a real device.
 
 Results are **computed, not proof**. Computed results are a simulation from these configs. They are not proof that a live network will behave the same way, and they are not proof that a real device or another software release will match this beta. Not affiliated with or endorsed by Cisco.
 
-**License:** [Apache License 2.0](LICENSE). Third-party credits are in [`NOTICE`](NOTICE) and [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES).
+Third-party credits are in [`NOTICE`](NOTICE) and [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES).
 
 **Support this project:** https://buymeacoffee.com/python1
 
@@ -381,4 +383,8 @@ A real computer restart, an Update Bot's Computer wipe, and a fresh assistant te
 
 ## License
 
-Apache License 2.0. The terms are in [LICENSE](LICENSE). Attribution for Batfish, xterm.js, and the other third-party code is in [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).
+Dry Run Lab is © 2026 Paul Charydczak, licensed under the [GNU AGPL v3.0 only](LICENSE) (`AGPL-3.0-only`). Third-party code keeps its own license. Attribution for Batfish, xterm.js, and the other third-party code is in [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).
+
+Created by Paul Charydczak.
+Source: https://github.com/python1/dry-run-lab
+License: [AGPL-3.0](LICENSE)
