@@ -625,6 +625,14 @@ export default function App() {
         <span>
           {CREDIT}
           {stamp ? <span className="ml-3">{stamp}</span> : null}
+          <a
+            className="ml-3 underline underline-offset-2 hover:text-paper"
+            href="https://buymeacoffee.com/python1"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Support this project
+          </a>
         </span>
         <span>Not a live network</span>
       </footer>
